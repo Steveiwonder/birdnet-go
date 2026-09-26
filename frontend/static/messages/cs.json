@@ -1779,6 +1779,7 @@
       "cudaFailed": "Inicializace selhala",
       "cudaNotInUse": "Vybráno, ale na CUDA neběží žádný model",
       "cudaOpsOnGpu": "{model}: {gpu} z {total} operátorů na GPU",
+      "cudaCpuOps": "Operátory na CPU: {ops}",
       "available": "Dostupné",
       "notAvailable": "Nedostupné",
       "active": "Aktivní",

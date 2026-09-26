@@ -298,6 +298,18 @@ func (bn *BirdNET) openVINOPlan() (plan openVINOPlan, ok bool, reason string) {
 // pass detectQuantization of the model file path. A file whose name carries no
 // precision token is treated as unverified (see applyOpenVINOQuantizationPolicy);
 // only a file whose name misstates its precision can still get the wrong plan.
+// cudaDeclinesOpenVINO reports whether an explicit CUDA selection keeps a
+// secondary model off OpenVINO, logging the declined attempt. CUDA runs the
+// model on ONNX Runtime's CUDA provider, so OpenVINO must not claim it first.
+// The primary model applies the same rule in birdnetV24OpenVINOPlan.
+func cudaDeclinesOpenVINO(modelID, backendPref string, ep inference.ExecutionProviderOptions) bool {
+	if !ep.UsesCUDA() {
+		return false
+	}
+	logOpenVINODeclined(modelID, backendPref, ovReasonCUDASelected)
+	return true
+}
+
 func birdnetV24OpenVINOPlan(cfg *conf.BirdNETConfig, quant Quantization) (plan openVINOPlan, ok bool, reason string) {
 	if executionProviderFor(cfg).UsesCUDA() {
 		return openVINOPlan{}, false, ovReasonCUDASelected

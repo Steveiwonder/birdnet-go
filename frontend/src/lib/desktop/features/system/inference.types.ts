@@ -119,8 +119,11 @@ export interface CUDASessionInfo {
  * or the GPU build of ONNX Runtime is present.
  */
 export interface CUDABackendStatus {
-  /** Configured ONNX Runtime execution provider ("cpu" or "cuda"). */
-  provider: string;
+  /**
+   * Configured ONNX Runtime execution provider. An unrecognised configured value
+   * is echoed as-is (the server rejects it at validation), hence the string fallback.
+   */
+  provider: 'cpu' | 'cuda' | (string & {});
   /** True when CUDA is the configured provider. */
   requested: boolean;
   deviceId: number;
@@ -229,7 +232,10 @@ export interface InferenceModel {
   sources: ModelSource[];
   metricKeys: ModelMetricKeys;
   lastDetection?: InferenceLastDetection;
-  /** Compute device the model's inference runs on ("CPU", "GPU", "NPU", or "Unknown"). */
+  /**
+   * Compute device the model's inference runs on ("CPU", "GPU", "NPU", "CUDA:<id>"
+   * for the ONNX Runtime CUDA provider, or "Unknown").
+   */
   device?: string;
   /** True when the model is currently paused by a schedule (e.g. bat night schedule). */
   paused?: boolean;

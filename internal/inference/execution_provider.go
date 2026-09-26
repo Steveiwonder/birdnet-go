@@ -85,6 +85,26 @@ func NormalizeExecutionProvider(name string) (string, error) {
 	}
 }
 
+// ResolveExecutionProvider builds the provider options for a configured
+// provider name and CUDA device. The name is canonicalized; an unrecognised
+// value is kept as given so NewONNXClassifier rejects it with a clear error
+// instead of it silently becoming CPU.
+func ResolveExecutionProvider(provider string, deviceID int) ExecutionProviderOptions {
+	if p, err := NormalizeExecutionProvider(provider); err == nil {
+		provider = p
+	}
+	return ExecutionProviderOptions{Provider: provider, DeviceID: deviceID}
+}
+
+// RecordCUDAFailure records a CUDA selection failure detected outside this
+// package (for example a TFLite model with CUDA selected) so the status API
+// reports it alongside provider initialization failures.
+func RecordCUDAFailure(err error) {
+	if err != nil {
+		cudaRegistry.recordError(err)
+	}
+}
+
 // CUDADeviceLabel returns the device label for a CUDA device ordinal, e.g. "CUDA:0".
 func CUDADeviceLabel(deviceID int) string {
 	return DeviceCUDA + ":" + strconv.Itoa(deviceID)
@@ -231,8 +251,8 @@ func (r *cudaSessionRegistry) add(info CUDASessionInfo) uint64 {
 	defer r.mu.Unlock()
 	r.nextID++
 	r.sessions[r.nextID] = info
-	// A successful CUDA load supersedes an earlier failure.
-	r.lastErr, r.lastErrAt = "", time.Time{}
+	// lastErr is kept: another model may still be failing, and its timestamp
+	// tells the reader whether it predates this load.
 	return r.nextID
 }
 

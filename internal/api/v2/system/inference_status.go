@@ -204,10 +204,7 @@ type CUDABackendStatus struct {
 // buildCUDABackendStatus combines the configured provider with the live CUDA
 // status from the inference layer. It is pure.
 func buildCUDABackendStatus(cfg *conf.BirdNETConfig, cuda *inference.CUDAStatus) CUDABackendStatus {
-	provider, err := inference.NormalizeExecutionProvider(cfg.ONNXProvider)
-	if err != nil {
-		provider = cfg.ONNXProvider
-	}
+	provider := inference.ResolveExecutionProvider(cfg.ONNXProvider, cfg.CUDADeviceID).Provider
 	sessions := cuda.Sessions
 	if sessions == nil {
 		sessions = []inference.CUDASessionInfo{}
@@ -229,11 +226,20 @@ func buildCUDABackendStatus(cfg *conf.BirdNETConfig, cuda *inference.CUDAStatus)
 // and judges reachability by the DRM render node, which CUDA does not use (the
 // NVIDIA Container Toolkit maps /dev/nvidia* instead). So when the CUDA
 // provider library is installed the no-runtime reason is dropped, and when a
-// model session is verifiably running on CUDA the card is reported reachable.
+// model session is verifiably running on CUDA and the host has a single NVIDIA
+// card, that card is reported reachable. With several cards the CUDA ordinal
+// cannot be mapped to a PCI device, so their reachability is left as probed.
 func applyCUDAToAccelerators(accelerators []AcceleratorInfo, cuda *CUDABackendStatus) {
 	if !cuda.LibraryPresent {
 		return
 	}
+	nvidiaCards := 0
+	for i := range accelerators {
+		if accelerators[i].Vendor == hwprofile.VendorNVIDIA {
+			nvidiaCards++
+		}
+	}
+	inUse := cuda.Active && nvidiaCards == 1
 	for i := range accelerators {
 		acc := &accelerators[i]
 		if acc.Vendor != hwprofile.VendorNVIDIA {
@@ -243,9 +249,9 @@ func applyCUDAToAccelerators(accelerators []AcceleratorInfo, cuda *CUDABackendSt
 			if r == hwprofile.ReasonNoRuntime {
 				return true
 			}
-			return cuda.Active && (r == hwprofile.ReasonRenderNodeUnavailable || r == hwprofile.ReasonRenderNodePermission)
+			return inUse && (r == hwprofile.ReasonRenderNodeUnavailable || r == hwprofile.ReasonRenderNodePermission)
 		})
-		if cuda.Active {
+		if inUse {
 			acc.Accessible = true
 		}
 		if len(reasons) == 0 {
@@ -279,8 +285,9 @@ type InferenceModelStatus struct {
 	Quantization     string `json:"quantization,omitempty"`
 	IsStock          bool   `json:"isStock"`
 	// Device is the compute device (execution provider) this model's inference
-	// runs on, resolved from the live runtime binding ("CPU", "GPU", or "Unknown"
-	// when the model is not loaded). Never inferred from the backend string.
+	// runs on, resolved from the live runtime binding ("CPU", "GPU" for OpenVINO,
+	// "CUDA:<id>" for the ONNX Runtime CUDA provider, or "Unknown" when the model
+	// is not loaded). Never inferred from the backend string.
 	Device string `json:"device"`
 	// Paused is true when the model is currently prevented from running inference
 	// by a schedule (e.g. the bat model outside its nighttime window).

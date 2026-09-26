@@ -41,6 +41,7 @@ func TestValidateONNXProvider(t *testing.T) {
 		{name: "unknown provider", cfg: BirdNETConfig{ONNXProvider: "gpu"}, wantErr: true},
 		{name: "negative device", cfg: BirdNETConfig{ONNXProvider: ONNXProviderCUDA, CUDADeviceID: -1}, wantErr: true},
 		{name: "cuda with forced openvino", cfg: BirdNETConfig{ONNXProvider: ONNXProviderCUDA, Backend: BackendPrefOpenVINO}, wantErr: true},
+		{name: "cuda with mixed-case openvino", cfg: BirdNETConfig{ONNXProvider: ONNXProviderCUDA, Backend: "OpenVINO"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

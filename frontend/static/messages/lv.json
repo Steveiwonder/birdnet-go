@@ -1779,6 +1779,7 @@
       "cudaFailed": "Inicializācija neizdevās",
       "cudaNotInUse": "Atlasīts, bet neviens modelis nedarbojas ar CUDA",
       "cudaOpsOnGpu": "{model}: {gpu} no {total} operatoriem uz GPU",
+      "cudaCpuOps": "Operatori uz CPU: {ops}",
       "available": "Pieejams",
       "notAvailable": "Nav pieejams",
       "active": "Aktīvs",

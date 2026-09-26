@@ -1779,6 +1779,7 @@
       "cudaFailed": "Alustus epäonnistui",
       "cudaNotInUse": "Valittu, mutta mikään malli ei toimi CUDAlla",
       "cudaOpsOnGpu": "{model}: {gpu}/{total} operaattoria GPU:lla",
+      "cudaCpuOps": "Operaattorit CPU:lla: {ops}",
       "available": "Saatavilla",
       "notAvailable": "Ei saatavilla",
       "active": "Aktiivinen",

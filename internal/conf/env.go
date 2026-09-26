@@ -329,9 +329,7 @@ func validateEnvTLSMode(value string) error {
 }
 
 func validateEnvONNXProvider(value string) error {
-	value = strings.TrimSpace(strings.ToLower(value))
-	validProviders := []string{"", ONNXProviderCPU, ONNXProviderCUDA}
-	if !slices.Contains(validProviders, value) {
+	if _, ok := normalizeONNXProvider(value); !ok {
 		return fmt.Errorf("must be one of: %s, %s", ONNXProviderCPU, ONNXProviderCUDA)
 	}
 	return nil

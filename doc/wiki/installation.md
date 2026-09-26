@@ -30,7 +30,8 @@ Both registries contain identical images. You can use either registry interchang
 ### NVIDIA GPU (CUDA) Image
 
 For inference on an NVIDIA GPU there is a separate linux/amd64 image variant
-with `cuda` tags (for this fork, `ghcr.io/steveiwonder/birdnet-go:cuda`). It
+with `cuda` tags, published to the GitHub Container Registry of the repository
+that builds it (for this fork, `ghcr.io/steveiwonder/birdnet-go:cuda`). It
 needs the NVIDIA driver and the NVIDIA Container Toolkit on the host, is started
 with `--gpus all`, and uses the CPU until you set `BIRDNET_ONNXPROVIDER=cuda`
 and select an ONNX model. See [NVIDIA GPU (CUDA) Inference](nvidia-gpu.md) for

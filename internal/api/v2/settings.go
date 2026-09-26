@@ -23,6 +23,7 @@ import (
 	"github.com/tphakala/birdnet-go/internal/conf"
 	"github.com/tphakala/birdnet-go/internal/events"
 	"github.com/tphakala/birdnet-go/internal/imageprovider"
+	"github.com/tphakala/birdnet-go/internal/inference"
 	"github.com/tphakala/birdnet-go/internal/logger"
 	"github.com/tphakala/birdnet-go/internal/notification"
 	"github.com/tphakala/birdnet-go/internal/profiling"
@@ -2720,8 +2721,8 @@ func birdnetSettingsChanged(oldSettings, currentSettings *conf.Settings) bool {
 	// rebuilt on the new provider, so this is hot-reloadable. The reload builds
 	// the new sessions before closing the old ones, so a CUDA request that fails
 	// to initialize leaves the previous sessions serving and reports the error.
-	if oldSettings.BirdNET.ONNXProvider != currentSettings.BirdNET.ONNXProvider ||
-		oldSettings.BirdNET.CUDADeviceID != currentSettings.BirdNET.CUDADeviceID {
+	if inference.ResolveExecutionProvider(oldSettings.BirdNET.ONNXProvider, oldSettings.BirdNET.CUDADeviceID) !=
+		inference.ResolveExecutionProvider(currentSettings.BirdNET.ONNXProvider, currentSettings.BirdNET.CUDADeviceID) {
 		return true
 	}
 

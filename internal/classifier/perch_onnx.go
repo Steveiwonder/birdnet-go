@@ -35,8 +35,9 @@ type Perch struct {
 	info       ModelInfo
 	mu         sync.Mutex
 	// device is the compute device the classifier bound to: the OpenVINO device
-	// (CPU/GPU) when the OV path succeeds, otherwise deviceCPU for the ONNX
-	// Runtime CPU EP. Set once at construction; reported via RuntimeInfo().
+	// (CPU/GPU) when the OV path succeeds, otherwise the ONNX Runtime provider's
+	// device (deviceCPU, or CUDA:<id> on the CUDA provider). Set once at
+	// construction; reported via RuntimeInfo().
 	device string
 	// backend is the live execution backend (BackendOpenVINO on the OV path, else
 	// BackendONNX), and precision is the effective runtime precision (on the OV
@@ -104,7 +105,7 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 	// falling back to ORT on any failure. OpenVINO must never make Perch fail to
 	// load, so tryPerchOpenVINO logs and swallows OV errors and returns ok=false.
 	// device records the compute device actually bound to (the OpenVINO device on
-	// the OV path, else the ONNX Runtime CPU EP).
+	// the OV path, else the ONNX Runtime provider's device).
 	classifier, device, precisionHint, ok := tryPerchOpenVINO(cfg, labels)
 	// On the OV path the effective runtime precision follows the compiled
 	// INFERENCE_PRECISION_HINT (f32 on the GPU per openVINOPrecisionFor, else the
@@ -179,10 +180,7 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 // variant, since the stock perch_v2.onnx cannot compile on OpenVINO (a
 // dynamic-rank DFT op).
 func tryPerchOpenVINO(cfg *PerchConfig, labels []string) (classifier inference.Classifier, device, precisionHint string, ok bool) {
-	// An explicit CUDA selection runs the model on ONNX Runtime's CUDA provider;
-	// OpenVINO must not claim it first.
-	if cfg.ExecutionProvider.UsesCUDA() {
-		logOpenVINODeclined(RegistryIDPerchV2, cfg.Backend, ovReasonCUDASelected)
+	if cudaDeclinesOpenVINO(RegistryIDPerchV2, cfg.Backend, cfg.ExecutionProvider) {
 		return nil, "", "", false
 	}
 	if !isPerchNoDFT(cfg.ModelPath) {

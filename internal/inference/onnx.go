@@ -103,8 +103,14 @@ func NewONNXClassifier(modelPath string, opts ONNXClassifierOptions) (Classifier
 		switch {
 		case providerErr != nil:
 			return nil, providerErr
-		case ep.UsesCUDA() && isCUDARuntimeError(err):
+		case ep.UsesCUDA() && isCUDARuntimeError(modelPath, err):
 			return nil, cudaInitError("session creation", ep.DeviceID, err)
+		case ep.UsesCUDA():
+			// Not a CUDA stack error (for example a bad model file or a failed
+			// placement probe), but the CUDA load still failed: report it.
+			wrapped := fmt.Errorf("failed to create ONNX classifier on CUDA device %d: %w", ep.DeviceID, err)
+			cudaRegistry.recordError(wrapped)
+			return nil, wrapped
 		}
 		return nil, fmt.Errorf("failed to create ONNX classifier: %w", err)
 	}
@@ -151,9 +157,10 @@ func (c *onnxClassifier) Placement() *ort.NodePlacement {
 }
 
 // isCUDARuntimeError reports whether an ONNX Runtime session error came from
-// the CUDA stack (driver, runtime, cuDNN or cuBLAS) rather than the model.
-func isCUDARuntimeError(err error) bool {
-	m := strings.ToLower(err.Error())
+// the CUDA stack (driver, runtime, cuDNN or cuBLAS) rather than the model. The
+// model path is removed first so a file or directory named "cuda" cannot match.
+func isCUDARuntimeError(modelPath string, err error) bool {
+	m := strings.ToLower(strings.ReplaceAll(err.Error(), modelPath, ""))
 	return strings.Contains(m, "cuda") || strings.Contains(m, "cudnn") || strings.Contains(m, "cublas")
 }
 
@@ -452,23 +459,4 @@ func DestroyONNXRuntime() error {
 	}
 	ortInitialized = false
 	return nil
-}
-
-// ONNXInputSampleCount returns the number of audio samples a classifier model
-// expects per inference (the last dimension of its first input). The ONNX
-// Runtime must be initialized via InitONNXRuntime before calling.
-func ONNXInputSampleCount(modelPath string) (int, error) {
-	inputs, _, err := ortlib.GetInputOutputInfo(modelPath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read model inputs: %w", err)
-	}
-	if len(inputs) == 0 || len(inputs[0].Dimensions) == 0 {
-		return 0, fmt.Errorf("model %s has no input tensor shape", filepath.Base(modelPath))
-	}
-	dims := inputs[0].Dimensions
-	n := dims[len(dims)-1]
-	if n <= 0 {
-		return 0, fmt.Errorf("model %s has a dynamic sample dimension", filepath.Base(modelPath))
-	}
-	return int(n), nil
 }

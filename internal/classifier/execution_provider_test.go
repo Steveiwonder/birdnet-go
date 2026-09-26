@@ -137,4 +137,8 @@ func TestSecondaryTripletFor_ProviderChange(t *testing.T) {
 	sameCUDA := &conf.Settings{}
 	sameCUDA.BirdNET.ONNXProvider = conf.ONNXProviderCUDA
 	assert.Equal(t, secondaryTripletFor(cuda), secondaryTripletFor(sameCUDA), "an unchanged provider must not rebuild")
+
+	explicitCPU := &conf.Settings{}
+	explicitCPU.BirdNET.ONNXProvider = "CPU"
+	assert.Equal(t, secondaryTripletFor(base), secondaryTripletFor(explicitCPU), `"", "cpu" and "CPU" are the same provider`)
 }

@@ -15,7 +15,7 @@ name: Build CUDA container image
 #   push to main        :cuda, :cuda-<sha7>
 #   push of a v* tag    :cuda-latest, :cuda-<tag>, :<tag>-cuda
 #   push to a branch    :cuda-<branch>, :cuda-<sha7>   (branch names containing
-#                       "gpu" or "cuda", so feature work can be tested)
+#                       "cuda" or "nvidia", so feature work can be tested)
 #   pull request        built and smoke-tested, never pushed
 
 concurrency:
@@ -26,17 +26,31 @@ on:
   push:
     branches:
       - main
-      - "**gpu**"
       - "**cuda**"
+      - "**nvidia**"
     tags:
       - "v*"
-    paths-ignore:
-      - "**.md"
+    # Only inputs of the image; docs, tests-only and CI changes elsewhere do not
+    # rebuild the multi-GB image. Tag pushes ignore path filters.
+    paths:
+      - Dockerfile
+      - .github/workflows/docker-build-cuda.yml
+      - go.mod
+      - go.sum
+      - main.go
+      - cmd/**
+      - internal/**
+      - frontend/**
+      - Docker/**
+      - Taskfile.yml
   pull_request:
     paths:
       - Dockerfile
       - .github/workflows/docker-build-cuda.yml
+      - cmd/cudabenchmark/**
       - internal/inference/**
+      - internal/classifier/**
+      - internal/conf/**
   workflow_dispatch:
 
 permissions:

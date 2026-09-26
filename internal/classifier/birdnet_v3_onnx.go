@@ -23,8 +23,9 @@ type BirdNETV3 struct {
 	info       ModelInfo
 	mu         sync.Mutex
 	// device is the compute device the classifier bound to: the OpenVINO device
-	// (CPU/GPU) when the OV path succeeds, otherwise deviceCPU for the ONNX Runtime
-	// CPU EP. Set once at construction; reported via RuntimeInfo().
+	// (CPU/GPU) when the OV path succeeds, otherwise the ONNX Runtime provider's
+	// device (deviceCPU, or CUDA:<id> on the CUDA provider). Set once at
+	// construction; reported via RuntimeInfo().
 	device string
 	// backend is the live execution backend (BackendOpenVINO on the OV path, else
 	// BackendONNX), and precision is the effective runtime precision (FP32 on the OV
@@ -107,7 +108,7 @@ func NewBirdNETV3(cfg *BirdNETV3Config) (*BirdNETV3, error) {
 	// any failure. OpenVINO must never make BirdNET v3.0 fail to load, so
 	// tryBirdNETV3OpenVINO logs and swallows OV errors and returns ok=false. device
 	// records the compute device actually bound to (the OpenVINO device on the OV
-	// path, else the ONNX Runtime CPU EP).
+	// path, else the ONNX Runtime provider's device).
 	classifier, device, precision, ok := tryBirdNETV3OpenVINO(cfg, labels)
 	// The OpenVINO path reports the precision it actually compiled at: FP32 for v3.0,
 	// which openVINOPrecisionFor forces on every device to avoid the f16 numeric
@@ -168,10 +169,7 @@ func NewBirdNETV3(cfg *BirdNETV3Config) (*BirdNETV3, error) {
 // never make BirdNET v3.0 fail to load. Unlike Perch there is no model-variant filename
 // gate: the v3.0 GPU-native model has no STFT op, so it compiles on OpenVINO directly.
 func tryBirdNETV3OpenVINO(cfg *BirdNETV3Config, labels []string) (classifier inference.Classifier, device, precision string, ok bool) {
-	// An explicit CUDA selection runs the model on ONNX Runtime's CUDA provider;
-	// OpenVINO must not claim it first.
-	if cfg.ExecutionProvider.UsesCUDA() {
-		logOpenVINODeclined(RegistryIDBirdNETV3, cfg.Backend, ovReasonCUDASelected)
+	if cudaDeclinesOpenVINO(RegistryIDBirdNETV3, cfg.Backend, cfg.ExecutionProvider) {
 		return nil, "", "", false
 	}
 	// openVINOPlanFor gates on the build tag, backend preference, and device

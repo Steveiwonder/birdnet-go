@@ -22,8 +22,9 @@ type Bat struct {
 	info               ModelInfo
 	mu                 sync.Mutex
 	// device is the compute device the bat pipeline bound to: the OpenVINO device
-	// (CPU/GPU) when the heavy embedding extractor runs on OpenVINO, otherwise
-	// deviceCPU for the ONNX Runtime CPU EP. The tiny bat classifier head always runs
+	// (CPU/GPU) when the heavy embedding extractor runs on OpenVINO, otherwise the
+	// ONNX Runtime provider's device (deviceCPU, or CUDA:<id> when CUDA is
+	// selected; see onnxDeviceLabel). The tiny bat classifier head always runs
 	// on ORT CPU, so this reports the embedding extractor's device. Set once at
 	// construction; reported via RuntimeInfo().
 	device string
@@ -173,10 +174,7 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 // f16. expectedDim is the bat classifier's input dimension, used to reject a wrong
 // output port before any inference.
 func tryBatOpenVINO(cfg *BatModelConfig, expectedDim int) (extractor inference.EmbeddingExtractor, device, precision string, ok bool) {
-	// An explicit CUDA selection runs the model on ONNX Runtime's CUDA provider;
-	// OpenVINO must not claim it first.
-	if cfg.ExecutionProvider.UsesCUDA() {
-		logOpenVINODeclined(RegistryIDBat, cfg.Backend, ovReasonCUDASelected)
+	if cudaDeclinesOpenVINO(RegistryIDBat, cfg.Backend, cfg.ExecutionProvider) {
 		return nil, "", "", false
 	}
 	log := GetLogger()
@@ -403,7 +401,8 @@ func (b *Bat) Labels() []string {
 
 // RuntimeInfo returns the device, backend, and effective precision the bat
 // pipeline bound to at construction: the OpenVINO device (CPU/GPU) when the
-// embedding extractor runs on OpenVINO, else "CPU" for the ONNX Runtime CPU EP;
+// embedding extractor runs on OpenVINO, else the ONNX Runtime provider's device
+// ("CPU", or "CUDA:<id>" on the CUDA provider);
 // BackendOpenVINO on the OV path (else BackendONNX); FP32 on the OV path (which
 // the bat embedding model is forced to), or the weight precision detected from
 // the bat classifier model filename on the ORT path (empty when no token). All

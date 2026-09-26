@@ -92,7 +92,7 @@ func WithSessionConfigurer(fn func(*ort.SessionOptions) error) ClassifierOption 
 // WithPlacementProbe runs one profiled inference on silence at load time and
 // records which execution provider each operator actually ran on (see
 // Placement). Use it when an accelerator provider is registered through
-// WithSessionOptions, to prove the model really executes on the device.
+// WithSessionConfigurer, to prove the model really executes on the device.
 func WithPlacementProbe() ClassifierOption {
 	return func(c *classifierConfig) { c.probePlacement = true }
 }
@@ -617,4 +617,26 @@ func destroyTensors(tensors []ort.Value) {
 			_ = t.Destroy()
 		}
 	}
+}
+
+// DetectModelConfig reads a classifier model's metadata and returns the derived
+// configuration (model type, sample count, outputs) without creating a session.
+// The ONNX Runtime must be initialized first.
+func DetectModelConfig(modelPath string) (ModelConfig, error) {
+	if modelPath == "" {
+		return ModelConfig{}, ErrModelPathRequired
+	}
+	_, inputShapes, outputNames, outputInfos, err := loadModelMetadata(modelPath)
+	if err != nil {
+		return ModelConfig{}, err
+	}
+	mt, err := resolveModelType(defaultClassifierConfig(), inputShapes, len(outputNames))
+	if err != nil {
+		return ModelConfig{}, err
+	}
+	outputShapes := make([][]int64, len(outputInfos))
+	for i := range outputInfos {
+		outputShapes[i] = outputInfos[i].Dimensions
+	}
+	return buildModelConfig(mt, inputShapes[0], outputShapes), nil
 }

@@ -1779,6 +1779,7 @@
       "cudaFailed": "Initieringen misslyckades",
       "cudaNotInUse": "Vald, men ingen modell körs på CUDA",
       "cudaOpsOnGpu": "{model}: {gpu} av {total} operatorer på GPU",
+      "cudaCpuOps": "Operatorer på CPU: {ops}",
       "available": "Tillgänglig",
       "notAvailable": "Ej tillgänglig",
       "active": "Aktiv",

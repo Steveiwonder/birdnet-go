@@ -76,7 +76,7 @@ type secondaryBackendKey struct {
 	// GPU-bound secondary simply rebuilds to an equivalent session.
 	threads int
 	// onnxProvider and cudaDevice are the ONNX Runtime execution provider
-	// (BirdNET.ONNXProvider, raw) and CUDA ordinal the session was built with, so
+	// (BirdNET.ONNXProvider, see secondaryProviderKey) and CUDA ordinal the session was built with, so
 	// switching between CPU and CUDA, or between GPUs, rebuilds every secondary.
 	onnxProvider string
 	cudaDevice   int
@@ -1591,9 +1591,20 @@ func secondaryTripletFor(settings *conf.Settings) secondaryBackendKey {
 		ovPath:   settings.BirdNET.OpenVINOPath,
 		threads:  settings.BirdNET.Threads,
 
-		onnxProvider: settings.BirdNET.ONNXProvider,
+		onnxProvider: secondaryProviderKey(&settings.BirdNET),
 		cudaDevice:   settings.BirdNET.CUDADeviceID,
 	}
+}
+
+// secondaryProviderKey returns the canonical ONNX Runtime provider for the
+// secondary rebuild key. The CPU provider maps to the zero value, so "", "cpu"
+// and "CPU" compare equal and never force a rebuild of an unchanged model.
+func secondaryProviderKey(cfg *conf.BirdNETConfig) string {
+	provider := executionProviderFor(cfg).Provider
+	if provider == inference.ExecutionProviderCPU {
+		return ""
+	}
+	return provider
 }
 
 // ReloadSecondaryModels rebuilds the OV-capable secondary models (Perch, and the

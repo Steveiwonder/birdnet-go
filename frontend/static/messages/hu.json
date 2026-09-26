@@ -1779,6 +1779,7 @@
       "cudaFailed": "Az inicializálás sikertelen",
       "cudaNotInUse": "Kiválasztva, de egyik modell sem fut CUDA-n",
       "cudaOpsOnGpu": "{model}: {total} operátorból {gpu} a GPU-n",
+      "cudaCpuOps": "Operátorok a CPU-n: {ops}",
       "available": "Elérhető",
       "notAvailable": "Nem elérhető",
       "active": "Aktív",

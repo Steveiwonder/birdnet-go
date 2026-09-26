@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tphakala/go-wav"
+
+	"github.com/tphakala/birdnet-go/internal/inference/onnx"
 )
 
 func TestSummarizeLatencies(t *testing.T) {
@@ -23,8 +25,6 @@ func TestSummarizeLatencies(t *testing.T) {
 	assert.Equal(t, 3*time.Millisecond, s.mean)
 	assert.Equal(t, 3*time.Millisecond, s.median)
 	assert.Equal(t, 5*time.Millisecond, s.p95)
-	assert.Equal(t, time.Millisecond, s.min)
-	assert.Equal(t, 5*time.Millisecond, s.max)
 	assert.Equal(t, 5*time.Millisecond, in[0], "input must not be reordered")
 }
 
@@ -43,35 +43,64 @@ func TestChunkSamples(t *testing.T) {
 func TestTopClassesAndDetections(t *testing.T) {
 	t.Parallel()
 
-	logits := []float32{-4, 3, 0, 1}
-	top := topClasses(logits, 2)
+	scores := []float32{0.01, 0.95, 0.5, 0.7}
+	top := topClasses(scores, 2)
 	require.Len(t, top, 2)
 	assert.Equal(t, 1, top[0].index)
 	assert.Equal(t, 3, top[1].index)
-	assert.InDelta(t, 0.9526, top[0].score, 1e-3)
 
-	assert.Len(t, topClasses(logits, 10), 4, "k is clamped to the class count")
-	assert.Equal(t, []int{1, 2, 3}, detections(logits, 0.5))
+	assert.Len(t, topClasses(scores, 10), 4, "k is clamped to the class count")
+	assert.Equal(t, []int{1, 2, 3}, detections(scores, 0.5))
+	assert.Equal(t, 1, argmax(scores))
+	assert.Equal(t, -1, argmax(nil))
+}
+
+// window builds a window output whose scores are the BirdNET v2.4 activation
+// (sigmoid) of raw, as the benchmark does through onnx.Activate.
+func window(raw ...float32) windowOutput {
+	return windowOutput{raw: raw, scores: onnx.Activate(onnx.BirdNETv24, raw)}
 }
 
 func TestCompareOutputs(t *testing.T) {
 	t.Parallel()
 
-	cpu := [][]float32{{3, -2, 0.5}, {-1, 2, -3}}
+	cpu := []windowOutput{window(3, -2, 0.5), window(-1, 2, -3)}
 	identical := compareOutputs(cpu, cpu, 0.5)
 	assert.Equal(t, 2, identical.windows)
 	assert.Equal(t, 2, identical.top1Agree)
 	assert.Equal(t, 2, identical.detectionSetsAgree)
-	assert.Zero(t, identical.maxAbsLogitDiff)
+	assert.Zero(t, identical.maxAbsRawDiff)
 
 	// Tiny numeric noise keeps the decisions; a flipped class does not.
-	gpu := [][]float32{{3.001, -2, 0.5}, {2.5, 2, -3}}
+	gpu := []windowOutput{window(3.001, -2, 0.5), window(2.5, 2, -3)}
 	c := compareOutputs(cpu, gpu, 0.5)
 	assert.Equal(t, 1, c.top1Agree)
 	assert.Equal(t, 1, c.detectionSetsAgree)
-	assert.InDelta(t, 3.5, c.maxAbsLogitDiff, 1e-6)
-	assert.Positive(t, c.meanAbsLogitDiff)
+	assert.InDelta(t, 3.5, c.maxAbsRawDiff, 1e-6)
+	assert.Positive(t, c.meanAbsRawDiff)
 	assert.Positive(t, c.maxAbsScoreDiff)
+}
+
+// BirdNET v3.0 outputs probabilities; comparing them must not re-apply a
+// sigmoid, which would push every class above a 0.5 threshold.
+func TestCompareOutputs_V30ScoresNotResquashed(t *testing.T) {
+	t.Parallel()
+
+	raw := []float32{0.9, 0.1, 0.2}
+	w := windowOutput{raw: raw, scores: onnx.Activate(onnx.BirdNETv30, raw)}
+	assert.Equal(t, []int{0}, detections(w.scores, 0.5))
+}
+
+func TestSyntheticAudio(t *testing.T) {
+	t.Parallel()
+
+	a := syntheticAudio(480, 48000)
+	b := syntheticAudio(480, 48000)
+	require.Len(t, a, 480)
+	assert.Equal(t, a, b, "the synthetic signal is deterministic")
+	for _, v := range a {
+		assert.LessOrEqual(t, math.Abs(float64(v)), synthAmplitude+synthNoise)
+	}
 }
 
 func TestParseNvidiaSmiLine(t *testing.T) {
@@ -103,39 +132,21 @@ func TestSummarizeGPU(t *testing.T) {
 func TestMonoFloat(t *testing.T) {
 	t.Parallel()
 
-	t.Run("pcm16 stereo keeps first channel", func(t *testing.T) {
+	t.Run("stereo keeps first channel", func(t *testing.T) {
 		t.Parallel()
-		data := make([]byte, 8)
-		binary.LittleEndian.PutUint16(data[0:], uint16(16384)) // frame 0, left: 0.5
-		binary.LittleEndian.PutUint16(data[2:], uint16(1))     // frame 0, right (ignored)
-		v := int16(-32768)
-		binary.LittleEndian.PutUint16(data[4:], uint16(v)) // frame 1, left: -1
-		out, err := monoFloat(data, &wav.StreamInfo{Channels: 2, BitDepth: 16, Format: wav.SampleFormatPCM})
+		data := make([]byte, 16)
+		binary.LittleEndian.PutUint32(data[0:], uint32(1<<30)) // frame 0, left: 0.5
+		binary.LittleEndian.PutUint32(data[4:], 1)             // frame 0, right (ignored)
+		v := int32(math.MinInt32)
+		binary.LittleEndian.PutUint32(data[8:], uint32(v)) // frame 1, left: -1
+		out, err := monoFloat(data, &wav.StreamInfo{Channels: 2, BitDepth: 32, Format: wav.SampleFormatPCM})
 		require.NoError(t, err)
 		assert.InDeltaSlice(t, []float32{0.5, -1}, out, 1e-6)
 	})
 
-	t.Run("pcm32", func(t *testing.T) {
+	t.Run("rejects unconverted width and no channels", func(t *testing.T) {
 		t.Parallel()
-		data := make([]byte, 4)
-		binary.LittleEndian.PutUint32(data, uint32(1<<30)) // 0.5
-		out, err := monoFloat(data, &wav.StreamInfo{Channels: 1, BitDepth: 32, Format: wav.SampleFormatPCM})
-		require.NoError(t, err)
-		assert.InDeltaSlice(t, []float32{0.5}, out, 1e-6)
-	})
-
-	t.Run("float32", func(t *testing.T) {
-		t.Parallel()
-		data := make([]byte, 4)
-		binary.LittleEndian.PutUint32(data, math.Float32bits(-0.25))
-		out, err := monoFloat(data, &wav.StreamInfo{Channels: 1, BitDepth: 32, Format: wav.SampleFormatFloat})
-		require.NoError(t, err)
-		assert.Equal(t, []float32{-0.25}, out)
-	})
-
-	t.Run("unsupported", func(t *testing.T) {
-		t.Parallel()
-		_, err := monoFloat(make([]byte, 3), &wav.StreamInfo{Channels: 1, BitDepth: 24, Format: wav.SampleFormatPCM})
+		_, err := monoFloat(make([]byte, 4), &wav.StreamInfo{Channels: 1, BitDepth: 16, Format: wav.SampleFormatPCM})
 		require.Error(t, err)
 		_, err = monoFloat(nil, &wav.StreamInfo{})
 		require.Error(t, err)

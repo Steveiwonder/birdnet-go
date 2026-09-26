@@ -1779,6 +1779,7 @@
       "cudaFailed": "Error al inicializar",
       "cudaNotInUse": "Seleccionado, pero ningún modelo se ejecuta en CUDA",
       "cudaOpsOnGpu": "{model}: {gpu} de {total} operadores en GPU",
+      "cudaCpuOps": "Operadores en la CPU: {ops}",
       "available": "Disponible",
       "notAvailable": "No disponible",
       "active": "Activo",

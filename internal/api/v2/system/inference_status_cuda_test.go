@@ -117,4 +117,14 @@ func TestApplyCUDAToAccelerators(t *testing.T) {
 		assert.True(t, accs[0].Accessible)
 		assert.Equal(t, nvidia()[1], accs[1])
 	})
+
+	t.Run("several nvidia cards keep their probed reachability", func(t *testing.T) {
+		t.Parallel()
+		accs := append(nvidia(), AcceleratorInfo{Vendor: hwprofile.VendorNVIDIA, Reasons: []string{hwprofile.ReasonNoRuntime, hwprofile.ReasonRenderNodeUnavailable}})
+		applyCUDAToAccelerators(accs, &CUDABackendStatus{LibraryPresent: true, Active: true})
+		for _, i := range []int{0, 2} {
+			assert.Equal(t, []string{hwprofile.ReasonRenderNodeUnavailable}, accs[i].Reasons)
+			assert.False(t, accs[i].Accessible)
+		}
+	})
 }

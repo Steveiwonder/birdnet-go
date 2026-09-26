@@ -1653,6 +1653,24 @@ describe('SystemInference', () => {
       expect(container.textContent).not.toContain(CUDA_LABEL_KEY);
     });
 
+    it('hides the row when CUDA can never apply (CPU runtime, CPU selected)', async () => {
+      installApi(
+        withCuda({
+          provider: 'cpu',
+          requested: false,
+          deviceId: 0,
+          libraryPresent: false,
+          active: false,
+          sessions: [],
+        })
+      );
+      const { container } = inferenceTest.render({});
+      await waitFor(() => {
+        expect(container.textContent).toContain('system.inference.sectionBackends');
+      });
+      expect(container.textContent).not.toContain(CUDA_LABEL_KEY);
+    });
+
     it('shows active CUDA sessions with their measured operator placement', async () => {
       installApi(
         withCuda({

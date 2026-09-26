@@ -844,10 +844,12 @@
             </div>
           {/if}
 
-          {#if cuda && cudaState}
-            <!-- ONNX Runtime CUDA provider. "Active" only when a model session is
-                 measured running on the GPU; a failed or unused CUDA selection is
-                 shown as such, never as available. -->
+          {#if cuda && cudaState && cudaState !== 'unavailable'}
+            <!-- ONNX Runtime CUDA provider. Hidden when CUDA can never apply (a CPU
+                 build of ONNX Runtime and CUDA not selected), so CPU and ARM users
+                 see no GPU row. "Active" only when a model session is measured
+                 running on the GPU; a failed or unused CUDA selection is shown as
+                 such, never as available. -->
             <div class="flex items-center gap-3 flex-wrap">
               <span class="text-sm min-w-32">{t('system.inference.backendCuda')}</span>
               <StatusPill variant={cudaVariant(cudaState)} label={cudaLabel(cudaState)} size="xs" />
@@ -861,7 +863,7 @@
                     total: session.totalNodes,
                   })}
                   title={session.cpuOps && session.cpuOps.length > 0
-                    ? `CPU: ${session.cpuOps.join(', ')}`
+                    ? t('system.inference.cudaCpuOps', { ops: session.cpuOps.join(', ') })
                     : undefined}
                 />
               {/each}

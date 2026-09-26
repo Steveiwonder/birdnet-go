@@ -2,6 +2,7 @@ package cudabenchmark
 
 import (
 	"bufio"
+	"cmp"
 	"io"
 	"math"
 	"slices"
@@ -16,8 +17,6 @@ type latencyStats struct {
 	mean   time.Duration
 	median time.Duration
 	p95    time.Duration
-	min    time.Duration
-	max    time.Duration
 }
 
 // percentile95 is the latency percentile reported alongside the median.
@@ -40,8 +39,6 @@ func summarizeLatencies(durations []time.Duration) latencyStats {
 		mean:   total / time.Duration(len(sorted)),
 		median: sorted[len(sorted)/2],
 		p95:    sorted[max(p95Index, 0)],
-		min:    sorted[0],
-		max:    sorted[len(sorted)-1],
 	}
 }
 
@@ -60,83 +57,90 @@ func chunkSamples(audio []float32, size int) [][]float32 {
 	return chunks
 }
 
-// sigmoid maps a raw logit to a confidence score.
-func sigmoid(x float32) float32 {
-	return float32(1 / (1 + math.Exp(-float64(x))))
-}
-
 // scoredClass is one class index with its confidence.
 type scoredClass struct {
 	index int
 	score float32
 }
 
-// topClasses returns the k highest-confidence classes of a logit vector.
-func topClasses(logits []float32, k int) []scoredClass {
-	classes := make([]scoredClass, len(logits))
-	for i, l := range logits {
-		classes[i] = scoredClass{index: i, score: sigmoid(l)}
+// topClasses returns the k highest-scoring classes, highest first.
+func topClasses(scores []float32, k int) []scoredClass {
+	classes := make([]scoredClass, len(scores))
+	for i, sc := range scores {
+		classes[i] = scoredClass{index: i, score: sc}
 	}
 	slices.SortStableFunc(classes, func(a, b scoredClass) int {
-		switch {
-		case a.score > b.score:
-			return -1
-		case a.score < b.score:
-			return 1
-		default:
-			return 0
-		}
+		return cmp.Compare(b.score, a.score)
 	})
 	return classes[:min(k, len(classes))]
 }
 
+// argmax returns the index of the highest score, or -1 for an empty slice.
+func argmax(scores []float32) int {
+	best := -1
+	for i, sc := range scores {
+		if best < 0 || sc > scores[best] {
+			best = i
+		}
+	}
+	return best
+}
+
 // detections returns the sorted class indices scoring at or above minScore.
-func detections(logits []float32, minScore float32) []int {
+func detections(scores []float32, minScore float32) []int {
 	var out []int
-	for i, l := range logits {
-		if sigmoid(l) >= minScore {
+	for i, sc := range scores {
+		if sc >= minScore {
 			out = append(out, i)
 		}
 	}
 	return out
 }
 
+// windowOutput is one analysis window's raw model output and the activated
+// per-class scores derived from it (see onnx.Activate).
+type windowOutput struct {
+	raw    []float32
+	scores []float32
+}
+
 // comparison describes how closely two providers' outputs agree on the same
 // audio windows.
 type comparison struct {
 	windows            int
-	maxAbsLogitDiff    float64
-	meanAbsLogitDiff   float64
+	maxAbsRawDiff      float64
+	meanAbsRawDiff     float64
 	maxAbsScoreDiff    float64
 	top1Agree          int
 	detectionSetsAgree int
 }
 
-// compareOutputs compares per-window logits from a reference (CPU) run and a
+// compareOutputs compares per-window outputs from a reference (CPU) run and a
 // candidate (CUDA) run. Windows are compared up to the shorter of the two.
-func compareOutputs(reference, candidate [][]float32, minScore float32) comparison {
+func compareOutputs(reference, candidate []windowOutput, minScore float32) comparison {
 	c := comparison{windows: min(len(reference), len(candidate))}
 	var sum float64
 	var n int
 	for w := range c.windows {
 		ref, cand := reference[w], candidate[w]
-		for i := range min(len(ref), len(cand)) {
-			d := math.Abs(float64(ref[i]) - float64(cand[i]))
-			c.maxAbsLogitDiff = max(c.maxAbsLogitDiff, d)
+		for i := range min(len(ref.raw), len(cand.raw)) {
+			d := math.Abs(float64(ref.raw[i]) - float64(cand.raw[i]))
+			c.maxAbsRawDiff = max(c.maxAbsRawDiff, d)
 			sum += d
 			n++
-			sd := math.Abs(float64(sigmoid(ref[i])) - float64(sigmoid(cand[i])))
-			c.maxAbsScoreDiff = max(c.maxAbsScoreDiff, sd)
 		}
-		if len(ref) > 0 && len(cand) > 0 && topClasses(ref, 1)[0].index == topClasses(cand, 1)[0].index {
+		for i := range min(len(ref.scores), len(cand.scores)) {
+			c.maxAbsScoreDiff = max(c.maxAbsScoreDiff, math.Abs(float64(ref.scores[i])-float64(cand.scores[i])))
+		}
+		if top := argmax(ref.scores); top >= 0 && top == argmax(cand.scores) {
 			c.top1Agree++
 		}
-		if slices.Equal(detections(ref, minScore), detections(cand, minScore)) {
+		if slices.Equal(detections(ref.scores, minScore), detections(cand.scores, minScore)) {
 			c.detectionSetsAgree++
 		}
 	}
 	if n > 0 {
-		c.meanAbsLogitDiff = sum / float64(n)
+		c.meanAbsRawDiff = sum / float64(n)
 	}
 	return c
 }

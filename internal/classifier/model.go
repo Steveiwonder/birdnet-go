@@ -10,7 +10,8 @@ import (
 )
 
 // Device name strings reported by ModelInstance.RuntimeInfo(). CPU-bound backends
-// (TFLite, ONNX Runtime CPU EP) report deviceCPU; OpenVINO-backed instances
+// (TFLite, ONNX Runtime CPU EP) report deviceCPU; ONNX Runtime sessions on the
+// CUDA provider report "CUDA:<id>" (onnxDeviceLabel); OpenVINO-backed instances
 // report the concrete OpenVINO device (inference.OVDeviceCPU/OVDeviceGPU).
 // deviceUnknown is returned by the Orchestrator when a model is not loaded.
 const (
@@ -114,8 +115,9 @@ type ModelInstance interface {
 	// pointer; Bat and Perch set it once at construction), so the read takes no lock
 	// and the three values are always from the same generation.
 	//
-	// device is deviceCPU ("CPU") or, for OpenVINO-backed instances, the concrete
-	// OpenVINO device (inference.OVDeviceCPU/OVDeviceGPU). backend is the live
+	// device is deviceCPU ("CPU"), "CUDA:<id>" for an ONNX Runtime CUDA session,
+	// or, for OpenVINO-backed instances, the concrete OpenVINO device
+	// (inference.OVDeviceCPU/OVDeviceGPU). backend is the live
 	// execution provider (BackendTFLite/BackendONNX/BackendOpenVINO), which is
 	// distinct from the model file format: an ONNX model file executed through the
 	// OpenVINO runtime reports BackendOpenVINO, not BackendONNX. precision is the

@@ -104,7 +104,7 @@ func TestCUDARegistry_Lifecycle(t *testing.T) {
 	sessions, lastErr, _ = cudaRegistry.snapshot()
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "m.onnx", sessions[0].Model)
-	assert.Empty(t, lastErr, "a successful CUDA load clears the previous failure")
+	assert.Contains(t, lastErr, "boom", "a later CUDA success must not hide another model's failure")
 
 	cudaRegistry.remove(id)
 	sessions, _, _ = cudaRegistry.snapshot()

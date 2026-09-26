@@ -690,25 +690,36 @@ func normalizeNtfyURLs(p *PushProviderConfig) {
 // CUDA is an ONNX Runtime provider, so it cannot be combined with forcing the
 // OpenVINO backend.
 func validateONNXProvider(cfg *BirdNETConfig, result *ValidationResult, normalized *BirdNETConfig) {
-	provider := strings.ToLower(strings.TrimSpace(cfg.ONNXProvider))
-	switch provider {
-	case "", ONNXProviderCPU, ONNXProviderCUDA:
-		normalized.ONNXProvider = provider
-	default:
+	provider, ok := normalizeONNXProvider(cfg.ONNXProvider)
+	if !ok {
 		result.Valid = false
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("BirdNET onnxprovider '%s' is not recognised; must be '%s' or '%s'", cfg.ONNXProvider, ONNXProviderCPU, ONNXProviderCUDA))
 		return
 	}
+	normalized.ONNXProvider = provider
 
 	if cfg.CUDADeviceID < 0 {
 		result.Valid = false
 		result.Errors = append(result.Errors, "BirdNET cudadeviceid must be at least 0")
 	}
 
-	if provider == ONNXProviderCUDA && cfg.Backend == BackendPrefOpenVINO {
+	if provider == ONNXProviderCUDA && strings.EqualFold(strings.TrimSpace(cfg.Backend), BackendPrefOpenVINO) {
 		result.Valid = false
 		result.Errors = append(result.Errors,
 			"BirdNET onnxprovider 'cuda' cannot be combined with backend 'openvino'; set backend to 'auto' or 'onnx' to use CUDA")
+	}
+}
+
+// normalizeONNXProvider lowercases and trims a configured ONNX Runtime
+// execution provider and reports whether it is one of the accepted values
+// ("" meaning the CPU default, "cpu" or "cuda").
+func normalizeONNXProvider(value string) (string, bool) {
+	provider := strings.ToLower(strings.TrimSpace(value))
+	switch provider {
+	case "", ONNXProviderCPU, ONNXProviderCUDA:
+		return provider, true
+	default:
+		return "", false
 	}
 }

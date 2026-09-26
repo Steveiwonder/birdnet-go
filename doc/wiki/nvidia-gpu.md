@@ -96,16 +96,19 @@ treated as `cpu`.
 ## Running the CUDA Image with Docker
 
 The CUDA images are built by the `docker-build-cuda` workflow and published to
-the GitHub Container Registry of the repository that runs it. For this fork the
-image is `ghcr.io/steveiwonder/birdnet-go`:
+the GitHub Container Registry of the repository that runs it, as
+`ghcr.io/<owner>/<repository>`. The examples below use
+`ghcr.io/steveiwonder/birdnet-go`, where this fork publishes them; substitute
+the owner of the repository you build from.
 
-| Tag                | Built from                                   |
-| ------------------ | -------------------------------------------- |
-| `cuda`             | the latest `main`                            |
-| `cuda-latest`      | the latest release tag                       |
-| `cuda-<version>`   | a release tag, e.g. `cuda-v1.2.3`            |
-| `cuda-<branch>`    | a branch whose name contains `gpu` or `cuda` |
-| `cuda-<short sha>` | a specific commit                            |
+| Tag                | Built from                                      |
+| ------------------ | ----------------------------------------------- |
+| `cuda`             | the latest `main`                               |
+| `cuda-latest`      | the latest release tag                          |
+| `cuda-<version>`   | a release tag, e.g. `cuda-v1.2.3`               |
+| `<version>-cuda`   | the same release tag, e.g. `v1.2.3-cuda`        |
+| `cuda-<branch>`    | a branch whose name contains `cuda` or `nvidia` |
+| `cuda-<short sha>` | a specific commit                               |
 
 The image is the standard BirdNET-Go image plus the GPU build of ONNX Runtime
 and the CUDA 12 and cuDNN 9 runtime libraries, so it is about 2.5 GB larger.
@@ -252,13 +255,17 @@ docker exec birdnet-go birdnet-go cuda-benchmark \
   --iterations 5
 ```
 
-- `--audio` takes a mono WAV at the model's sample rate (48 kHz for BirdNET
-  v2.4, 32 kHz for v3.0 and Perch); without it a synthetic signal is used.
+- `--audio` takes a WAV at the model's sample rate (48 kHz for BirdNET v2.4,
+  32 kHz for v3.0 and Perch; a different rate is rejected, so resample first).
+  Any PCM or float format is accepted and the first channel is used. Without
+  it a synthetic signal is used.
 - `--model` is the path of the installed ONNX file (the example is where the
   gallery installs the BirdNET v2.4 FP32 build).
 - `--labels` is optional; with a label file the comparison lists species names.
-- `--cuda-device` selects the GPU; `--min-score` sets the confidence at which a
-  class counts as detected in the comparison (default 0.5).
+- `--cuda-device` selects the GPU (default: `birdnet.cudadeviceid`);
+  `--min-score` sets the confidence at which a class counts as detected in the
+  comparison (default 0.5). Scores are computed per model type, exactly as in
+  detection (sigmoid for BirdNET v2.4, softmax for Perch, as-is for v3.0).
 - The command exits non-zero when CUDA fails, so it doubles as a CUDA check.
 
 Example output layout:
@@ -284,7 +291,9 @@ your threshold should match.
 
 ## Troubleshooting
 
-The error text always ends with a `hint:` naming the likely fix.
+CUDA initialization errors end with a `hint:` naming the likely fix; the other
+errors below name it directly. The most recent CUDA failure is also shown on
+the status page and in `backends.cuda.lastError`.
 
 ### `CUDA execution provider is not enabled in this build`
 

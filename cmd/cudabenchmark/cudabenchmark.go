@@ -6,8 +6,8 @@ package cudabenchmark
 
 import (
 	"bytes"
-	"encoding/binary"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -37,26 +38,28 @@ const (
 	// synthWindows is how many model windows of synthetic audio are generated
 	// when no audio file is given.
 	synthWindows = 10
-	warmupRuns        = 3
+	warmupRuns   = 3
 	// gpuSampleIntervalMs is the nvidia-smi sampling period during the CUDA run.
 	gpuSampleIntervalMs = 200
 	// placeholderLabel stands in for species names when no label file is given.
 	placeholderLabel = "?"
 	// percentScale converts a ratio to a percentage.
 	percentScale = 100
-	// pcm16Scale and pcm32Scale normalize signed 16- and 32-bit PCM to [-1, 1].
-	pcm16Scale = 32768.0
-	pcm32Scale = 2147483648.0
-	// bitDepth16 and bitDepth32 are the WAV sample widths the reader accepts.
-	bitDepth16 = 16
-	bitDepth32 = 32
-	// synthAmplitude and synthToneHz shape the synthetic test signal used when
-	// no audio file is given: a quiet tone in low-level noise.
+	// pcmBitDepth is the width every WAV input is converted to before scaling;
+	// pcm32Scale normalizes signed 32-bit PCM to [-1, 1].
+	pcmBitDepth = 32
+	pcm32Scale  = 2147483648.0
+	// synthAmplitude, synthNoise and synthToneHz shape the synthetic test
+	// signal used when no audio file is given: a quiet 3 kHz tone in low-level
+	// noise, generated at the model's sample rate.
 	synthAmplitude = 0.2
 	synthNoise     = 0.02
 	synthToneHz    = 3000
 	synthSeed      = 42
 )
+
+// flagCUDADevice is the flag selecting the CUDA device.
+const flagCUDADevice = "cuda-device"
 
 // options holds the command flags.
 type options struct {
@@ -79,11 +82,11 @@ type providerRun struct {
 	wall      time.Duration
 	cpuTime   time.Duration
 	cpuKnown  bool
-	outputs   [][]float32
+	outputs   []windowOutput
 	gpu       gpuSummary
 	gpuStatus string
 	// placement is the measured operator placement of the CUDA session.
-	placement *inference.CUDASessionInfo
+	placement *onnx.NodePlacement
 	err       error
 }
 
@@ -104,6 +107,9 @@ operator runs on the GPU.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts.threads = settings.BirdNET.Threads
+			if !cmd.Flags().Changed(flagCUDADevice) {
+				opts.deviceID = settings.BirdNET.CUDADeviceID
+			}
 			if opts.ortPath == "" {
 				opts.ortPath = settings.BirdNET.ONNXRuntimePath
 			}
@@ -115,7 +121,7 @@ operator runs on the GPU.`,
 	f.StringVar(&opts.labelsPath, "labels", "", "label file for the model (optional; enables species names and label validation)")
 	f.StringVar(&opts.audioPath, "audio", "", "mono WAV file at the model's sample rate (default: synthetic signal)")
 	f.IntVar(&opts.iterations, "iterations", defaultIterations, "passes over the audio per provider")
-	f.IntVar(&opts.deviceID, "cuda-device", 0, "CUDA device ordinal")
+	f.IntVar(&opts.deviceID, flagCUDADevice, 0, "CUDA device ordinal (default: birdnet.cudadeviceid)")
 	f.IntVar(&opts.topK, "top", defaultTopK, "classes listed per window in the comparison")
 	f.Float64Var(&opts.minScore, "min-score", defaultMinScore, "confidence at which a class counts as detected")
 	f.StringVar(&opts.ortPath, "onnxruntime", "", "path to libonnxruntime (default: birdnet.onnxruntimepath or the system search path)")
@@ -131,28 +137,32 @@ func run(ctx context.Context, out io.Writer, opts *options) error {
 	if err := inference.InitONNXRuntime(opts.ortPath); err != nil {
 		return err
 	}
-	sampleCount, err := inference.ONNXInputSampleCount(opts.modelPath)
+	modelCfg, err := onnx.DetectModelConfig(opts.modelPath)
 	if err != nil {
 		return err
 	}
+	sampleCount := modelCfg.SampleCount
 	labels, skipValidation, err := loadLabels(opts.labelsPath)
 	if err != nil {
 		return err
 	}
-	audio, audioDesc, err := loadAudio(opts.audioPath, sampleCount)
+	audio, audioDesc, err := loadAudio(opts.audioPath, &modelCfg)
 	if err != nil {
 		return err
 	}
 	windows := chunkSamples(audio, sampleCount)
+	if len(windows) == 0 {
+		return errors.NewStd("audio contains no samples")
+	}
 
-	_, _ = fmt.Fprintf(out, "Model:      %s\n", filepath.Base(opts.modelPath))
+	_, _ = fmt.Fprintf(out, "Model:      %s (%s)\n", filepath.Base(opts.modelPath), modelCfg.Type)
 	_, _ = fmt.Fprintf(out, "Audio:      %s, %d windows of %d samples, %d passes per provider\n",
 		audioDesc, len(windows), sampleCount, opts.iterations)
 	_, _ = fmt.Fprintf(out, "Threads:    %d (0 = all CPUs)\n\n", opts.threads)
 
-	cpu := benchmarkProvider(ctx, opts, labels, skipValidation, windows,
+	cpu := benchmarkProvider(ctx, opts, labels, skipValidation, windows, modelCfg.Type,
 		inference.ExecutionProviderOptions{Provider: inference.ExecutionProviderCPU})
-	cuda := benchmarkProvider(ctx, opts, labels, skipValidation, windows,
+	cuda := benchmarkProvider(ctx, opts, labels, skipValidation, windows, modelCfg.Type,
 		inference.ExecutionProviderOptions{Provider: inference.ExecutionProviderCUDA, DeviceID: opts.deviceID})
 
 	printReport(out, opts, labels, &cpu, &cuda)
@@ -164,7 +174,7 @@ func run(ctx context.Context, out io.Writer, opts *options) error {
 
 // benchmarkProvider loads the model on one provider and runs every window
 // opts.iterations times, recording the first pass's outputs for comparison.
-func benchmarkProvider(ctx context.Context, opts *options, labels []string, skipValidation bool, windows [][]float32, ep inference.ExecutionProviderOptions) providerRun {
+func benchmarkProvider(ctx context.Context, opts *options, labels []string, skipValidation bool, windows [][]float32, modelType onnx.ModelType, ep inference.ExecutionProviderOptions) providerRun {
 	res := providerRun{provider: ep.Provider}
 	start := time.Now()
 	classifier, err := inference.NewONNXClassifier(opts.modelPath, inference.ONNXClassifierOptions{
@@ -179,11 +189,8 @@ func benchmarkProvider(ctx context.Context, opts *options, labels []string, skip
 	}
 	defer classifier.Close()
 	res.loadTime = time.Since(start)
-	if ep.UsesCUDA() {
-		// The session just loaded is the newest one in the CUDA registry.
-		if sessions := inference.GetCUDAStatus(opts.ortPath).Sessions; len(sessions) > 0 {
-			res.placement = &sessions[len(sessions)-1]
-		}
+	if p, ok := classifier.(placementReporter); ok {
+		res.placement = p.Placement()
 	}
 
 	for range warmupRuns {
@@ -196,11 +203,14 @@ func benchmarkProvider(ctx context.Context, opts *options, labels []string, skip
 	var stopGPU func() (gpuSummary, string)
 	if ep.UsesCUDA() {
 		stopGPU = startGPUMonitor(ctx, ep.DeviceID)
+		// Stop the sampler on every return path; the success path below reads
+		// its summary first, and stopping twice is a no-op.
+		defer stopGPU()
 	}
 
 	cpuBefore, cpuOK := processCPUTime()
 	durations := make([]time.Duration, 0, len(windows)*opts.iterations)
-	res.outputs = make([][]float32, 0, len(windows))
+	res.outputs = make([]windowOutput, 0, len(windows))
 	runStart := time.Now()
 	for pass := range opts.iterations {
 		for _, w := range windows {
@@ -212,7 +222,7 @@ func benchmarkProvider(ctx context.Context, opts *options, labels []string, skip
 				return res
 			}
 			if pass == 0 {
-				res.outputs = append(res.outputs, logits)
+				res.outputs = append(res.outputs, windowOutput{raw: logits, scores: onnx.Activate(modelType, logits)})
 			}
 		}
 	}
@@ -225,6 +235,12 @@ func benchmarkProvider(ctx context.Context, opts *options, labels []string, skip
 		res.gpu, res.gpuStatus = stopGPU()
 	}
 	return res
+}
+
+// placementReporter is implemented by ONNX classifiers that measured their
+// operator placement at load time (CUDA sessions).
+type placementReporter interface {
+	Placement() *onnx.NodePlacement
 }
 
 // startGPUMonitor samples GPU utilization and memory with nvidia-smi until the
@@ -245,14 +261,19 @@ func startGPUMonitor(ctx context.Context, deviceID int) func() (gpuSummary, stri
 		cancel()
 		return func() (gpuSummary, string) { return gpuSummary{}, "nvidia-smi failed: " + err.Error() }
 	}
+	var once sync.Once
+	var summary gpuSummary
+	var status string
 	return func() (gpuSummary, string) {
-		cancel()
-		_ = cmd.Wait()
-		summary := summarizeGPU(&buf)
-		if summary.samples == 0 {
-			return summary, "nvidia-smi returned no samples"
-		}
-		return summary, ""
+		once.Do(func() {
+			cancel()
+			_ = cmd.Wait()
+			summary = summarizeGPU(&buf)
+			if summary.samples == 0 {
+				status = "nvidia-smi returned no samples"
+			}
+		})
+		return summary, status
 	}
 }
 
@@ -271,18 +292,22 @@ func loadLabels(path string) (labels []string, skipValidation bool, err error) {
 
 // loadAudio returns mono float samples from a WAV file, or a deterministic
 // synthetic signal when path is empty.
-func loadAudio(path string, sampleCount int) (samples []float32, desc string, err error) {
+func loadAudio(path string, modelCfg *onnx.ModelConfig) (samples []float32, desc string, err error) {
 	if path == "" {
-		return syntheticAudio(synthWindows * sampleCount), "synthetic tone + noise", nil
+		return syntheticAudio(synthWindows*modelCfg.SampleCount, modelCfg.SampleRate), "synthetic tone + noise", nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, "", err
 	}
 	defer func() { _ = f.Close() }()
-	data, info, err := pcm.DecodeInterleaved(f)
+	data, info, err := pcm.DecodeInterleaved(f, pcm.WithConvertTo(pcmBitDepth))
 	if err != nil {
 		return nil, "", fmt.Errorf("decode %s: %w", filepath.Base(path), err)
+	}
+	if info.SampleRate != modelCfg.SampleRate {
+		return nil, "", fmt.Errorf("%s is %d Hz but the model expects %d Hz; resample it first (for example with sox or ffmpeg)",
+			filepath.Base(path), info.SampleRate, modelCfg.SampleRate)
 	}
 	samples, err = monoFloat(data, &info)
 	if err != nil {
@@ -291,31 +316,21 @@ func loadAudio(path string, sampleCount int) (samples []float32, desc string, er
 	return samples, fmt.Sprintf("%s (%d Hz)", filepath.Base(path), info.SampleRate), nil
 }
 
-// monoFloat converts decoded little-endian PCM (16- or 32-bit integer, or
-// 32-bit float) to mono float32 samples, keeping the first channel.
+// monoFloat converts decoded little-endian signed 32-bit PCM (every input is
+// decoded with pcm.WithConvertTo(pcmBitDepth)) to mono float32 samples,
+// keeping the first channel.
 func monoFloat(data []byte, info *wav.StreamInfo) ([]float32, error) {
 	if info.Channels < 1 {
 		return nil, errors.NewStd("stream has no channels")
 	}
-	bytesPerSample := info.BytesPerSample()
-	frame := bytesPerSample * info.Channels
+	if info.BitDepth != pcmBitDepth {
+		return nil, fmt.Errorf("unexpected decoded width %d-bit", info.BitDepth)
+	}
+	frame := info.BytesPerFrame()
 	frames := len(data) / frame
 	out := make([]float32, frames)
-	switch {
-	case info.Format == wav.SampleFormatPCM && info.BitDepth == bitDepth16:
-		for i := range frames {
-			out[i] = float32(int16(binary.LittleEndian.Uint16(data[i*frame:]))) / pcm16Scale
-		}
-	case info.Format == wav.SampleFormatPCM && info.BitDepth == bitDepth32:
-		for i := range frames {
-			out[i] = float32(float64(int32(binary.LittleEndian.Uint32(data[i*frame:]))) / pcm32Scale)
-		}
-	case info.Format == wav.SampleFormatFloat && info.BitDepth == bitDepth32:
-		for i := range frames {
-			out[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*frame:]))
-		}
-	default:
-		return nil, fmt.Errorf("unsupported sample format %s/%d-bit; use 16- or 32-bit PCM or 32-bit float WAV", info.Format, info.BitDepth)
+	for i := range frames {
+		out[i] = float32(float64(int32(binary.LittleEndian.Uint32(data[i*frame:]))) / pcm32Scale)
 	}
 	return out, nil
 }
@@ -323,11 +338,11 @@ func monoFloat(data []byte, info *wav.StreamInfo) ([]float32, error) {
 // syntheticAudio builds a reproducible test signal: a quiet tone in low-level
 // noise. It is not birdsong, but it is identical for both providers, which is
 // all a CPU-versus-GPU comparison needs; pass --audio for real detections.
-func syntheticAudio(n int) []float32 {
+func syntheticAudio(n, sampleRate int) []float32 {
 	rng := rand.New(rand.NewPCG(synthSeed, synthSeed)) //nolint:gosec // deterministic test signal, not security relevant
 	out := make([]float32, n)
 	for i := range out {
-		tone := synthAmplitude * math.Sin(2*math.Pi*synthToneHz*float64(i)/float64(n))
+		tone := synthAmplitude * math.Sin(2*math.Pi*synthToneHz*float64(i)/float64(sampleRate))
 		out[i] = float32(tone + synthNoise*(rng.Float64()*2-1))
 	}
 	return out
@@ -360,9 +375,9 @@ func printReport(out io.Writer, opts *options, labels []string, cpu, cuda *provi
 				opts.deviceID, cuda.gpu.samples, cuda.gpu.avgUtilization, cuda.gpu.maxUtilization, cuda.gpu.maxMemoryMiB)
 		}
 		if p := cuda.placement; p != nil {
-			_, _ = fmt.Fprintf(out, "CUDA operator placement: %d of %d operators on the GPU", p.CUDANodes, p.TotalNodes)
-			if len(p.CPUOps) > 0 {
-				_, _ = fmt.Fprintf(out, " (CPU: %s)", strings.Join(p.CPUOps, ", "))
+			_, _ = fmt.Fprintf(out, "CUDA operator placement: %d of %d operators on the GPU", p.Count(onnx.ProviderCUDA), p.Total)
+			if cpuOps := p.Ops(onnx.ProviderCPU); len(cpuOps) > 0 {
+				_, _ = fmt.Fprintf(out, " (CPU: %s)", strings.Join(cpuOps, ", "))
 			}
 			_, _ = fmt.Fprintln(out)
 		}
@@ -375,14 +390,14 @@ func printReport(out io.Writer, opts *options, labels []string, cpu, cuda *provi
 	_, _ = fmt.Fprintf(out, "\nDetection comparison over %d windows (CPU is the reference):\n", c.windows)
 	_, _ = fmt.Fprintf(out, "  top-1 class identical:          %d/%d\n", c.top1Agree, c.windows)
 	_, _ = fmt.Fprintf(out, "  detections >= %.2f identical:   %d/%d\n", opts.minScore, c.detectionSetsAgree, c.windows)
-	_, _ = fmt.Fprintf(out, "  max |logit diff|:               %.6f (mean %.6f)\n", c.maxAbsLogitDiff, c.meanAbsLogitDiff)
+	_, _ = fmt.Fprintf(out, "  max |raw output diff|:          %.6f (mean %.6f)\n", c.maxAbsRawDiff, c.meanAbsRawDiff)
 	_, _ = fmt.Fprintf(out, "  max |confidence diff|:          %.6f\n", c.maxAbsScoreDiff)
 
 	_, _ = fmt.Fprintf(out, "\nTop %d per window (CPU | CUDA):\n", opts.topK)
 	for w := range c.windows {
 		_, _ = fmt.Fprintf(out, "  window %d\n", w)
-		cpuTop := topClasses(cpu.outputs[w], opts.topK)
-		cudaTop := topClasses(cuda.outputs[w], opts.topK)
+		cpuTop := topClasses(cpu.outputs[w].scores, opts.topK)
+		cudaTop := topClasses(cuda.outputs[w].scores, opts.topK)
 		for i := range min(len(cpuTop), len(cudaTop)) {
 			_, _ = fmt.Fprintf(out, "    %-40s %.4f | %-40s %.4f\n",
 				className(labels, cpuTop[i].index), cpuTop[i].score,

@@ -1366,6 +1366,7 @@ export type TranslationKey =
   | 'system.inference.cudaFailed'
   | 'system.inference.cudaNotInUse'
   | 'system.inference.cudaOpsOnGpu' // params: model, gpu, total
+  | 'system.inference.cudaCpuOps' // params: ops
   | 'system.inference.available'
   | 'system.inference.notAvailable'
   | 'system.inference.active'
@@ -4490,6 +4491,7 @@ export type TranslationParams = {
     gpu: string | number;
     total: string | number;
   };
+  'system.inference.cudaCpuOps': { ops: string | number };
   'system.inference.sourcesDegraded': { count: string | number; total: string | number };
   'system.inference.coDetectedHelp': { seconds: string | number };
   'system.inference.modelFailingHelp': { reason: string | number };
