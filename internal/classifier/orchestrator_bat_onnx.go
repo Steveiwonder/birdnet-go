@@ -54,6 +54,7 @@ func (o *Orchestrator) buildBat(settings *conf.Settings, threads int) (*Bat, pat
 		Backend:             settings.BirdNET.Backend,
 		OpenVINOPath:        settings.BirdNET.OpenVINOPath,
 		OpenVINODevice:      settings.BirdNET.OpenVINODevice,
+		ExecutionProvider:   executionProviderFor(&settings.BirdNET),
 	}
 
 	bat, err := NewBat(&cfg)

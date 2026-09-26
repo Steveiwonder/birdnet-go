@@ -11,6 +11,10 @@ BirdNET-Go Docker images are available from two registries:
 
 Both registries contain identical images and can be used interchangeably. The examples below use GitHub Container Registry, but you can substitute `tphakala/birdnet-go` if you prefer Docker Hub.
 
+For NVIDIA GPU inference, use the `cuda` image variant with a GPU reservation
+in the Compose file; see
+[NVIDIA GPU (CUDA) Inference](nvidia-gpu.md#docker-compose).
+
 ## Prerequisites
 
 - Docker and Docker Compose installed on your system

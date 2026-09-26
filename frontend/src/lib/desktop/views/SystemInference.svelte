@@ -53,6 +53,7 @@
   import {
     ERROR_CLASS_NON_FINITE,
     MODEL_HEALTH_FAILING,
+    cudaRowState,
   } from '$lib/desktop/features/system/inference.types';
   import type {
     InferenceStatusResponse,
@@ -61,6 +62,8 @@
     InferenceVAD,
     BackendStatus,
     OpenVINOBackendStatus,
+    CUDABackendStatus,
+    CUDARowState,
   } from '$lib/desktop/features/system/inference.types';
   import type { StatusVariant } from '$lib/desktop/components/ui/StatusPill.svelte';
 
@@ -414,6 +417,37 @@
   let openvino = $derived<OpenVINOBackendStatus | null>(
     snapshot ? snapshot.backends.openvino : null
   );
+
+  let cuda = $derived<CUDABackendStatus | null>(snapshot?.backends.cuda ?? null);
+  let cudaState = $derived<CUDARowState | null>(cuda ? cudaRowState(cuda) : null);
+
+  function cudaVariant(state: CUDARowState): StatusVariant {
+    switch (state) {
+      case 'active':
+        return 'success';
+      case 'failed':
+        return 'error';
+      case 'notInUse':
+        return 'warning';
+      default:
+        return 'neutral';
+    }
+  }
+
+  function cudaLabel(state: CUDARowState): string {
+    switch (state) {
+      case 'active':
+        return t('system.inference.active');
+      case 'failed':
+        return t('system.inference.cudaFailed');
+      case 'notInUse':
+        return t('system.inference.cudaNotInUse');
+      case 'available':
+        return t('system.inference.available');
+      default:
+        return t('system.inference.notAvailable');
+    }
+  }
 
   // Reason codes are produced by the backend hardware probe (the Reason*
   // constants in internal/hwprofile/hwprofile.go). The mapping is an explicit
@@ -808,6 +842,35 @@
                 {/each}
               {/if}
             </div>
+          {/if}
+
+          {#if cuda && cudaState}
+            <!-- ONNX Runtime CUDA provider. "Active" only when a model session is
+                 measured running on the GPU; a failed or unused CUDA selection is
+                 shown as such, never as available. -->
+            <div class="flex items-center gap-3 flex-wrap">
+              <span class="text-sm min-w-32">{t('system.inference.backendCuda')}</span>
+              <StatusPill variant={cudaVariant(cudaState)} label={cudaLabel(cudaState)} size="xs" />
+              {#each cuda.sessions as session, index (`${session.model}_${index}`)}
+                <Badge
+                  variant="neutral"
+                  size="sm"
+                  text={t('system.inference.cudaOpsOnGpu', {
+                    model: session.model,
+                    gpu: session.cudaNodes,
+                    total: session.totalNodes,
+                  })}
+                  title={session.cpuOps && session.cpuOps.length > 0
+                    ? `CPU: ${session.cpuOps.join(', ')}`
+                    : undefined}
+                />
+              {/each}
+            </div>
+            {#if cudaState === 'failed' && cuda.lastError}
+              <p class="text-xs text-[var(--color-error)] break-words" role="status">
+                {cuda.lastError}
+              </p>
+            {/if}
           {/if}
         </div>
 

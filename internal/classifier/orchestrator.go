@@ -75,6 +75,11 @@ type secondaryBackendKey struct {
 	// Ignored in practice by GPU sessions, which reject INFERENCE_NUM_THREADS, so a
 	// GPU-bound secondary simply rebuilds to an equivalent session.
 	threads int
+	// onnxProvider and cudaDevice are the ONNX Runtime execution provider
+	// (BirdNET.ONNXProvider, raw) and CUDA ordinal the session was built with, so
+	// switching between CPU and CUDA, or between GPUs, rebuilds every secondary.
+	onnxProvider string
+	cudaDevice   int
 }
 
 // Orchestrator manages classifier model instances and provides the primary
@@ -1585,12 +1590,15 @@ func secondaryTripletFor(settings *conf.Settings) secondaryBackendKey {
 		ovDevice: settings.BirdNET.OpenVINODevice,
 		ovPath:   settings.BirdNET.OpenVINOPath,
 		threads:  settings.BirdNET.Threads,
+
+		onnxProvider: settings.BirdNET.ONNXProvider,
+		cudaDevice:   settings.BirdNET.CUDADeviceID,
 	}
 }
 
 // ReloadSecondaryModels rebuilds the OV-capable secondary models (Perch, and the
 // bat embedding extractor) when the BirdNET inference backend, OpenVINO device
-// preference, or CPU thread count changes at runtime, so they move to the new
+// preference, ONNX Runtime execution provider, or CPU thread count changes at runtime, so they move to the new
 // device (or thread budget) without a full restart, matching the primary reload.
 // It mirrors the primary reload's transactional safety: each model is built on
 // the new backend BEFORE the old instance is closed, and a build failure leaves

@@ -173,6 +173,86 @@ type BackendsInfo struct {
 	TFLite   BackendStatus         `json:"tflite"`
 	ONNX     BackendStatus         `json:"onnx"`
 	OpenVINO OpenVINOBackendStatus `json:"openvino"`
+	CUDA     CUDABackendStatus     `json:"cuda"`
+}
+
+// CUDABackendStatus reports the ONNX Runtime CUDA execution provider: what is
+// configured, whether the installed runtime can do CUDA at all, and the
+// sessions that are really running on the GPU (each with the operator
+// placement measured when it loaded). Active is true only when a model session
+// is running on CUDA, never merely because a GPU or the library is present.
+type CUDABackendStatus struct {
+	// Provider is the configured ONNX Runtime execution provider ("cpu" or "cuda").
+	Provider string `json:"provider"`
+	// Requested is true when the configured provider is "cuda".
+	Requested bool `json:"requested"`
+	// DeviceID is the configured CUDA device ordinal.
+	DeviceID int `json:"deviceId"`
+	// LibraryPresent reports whether the installed ONNX Runtime is a GPU build
+	// (the CUDA provider library sits next to it).
+	LibraryPresent bool `json:"libraryPresent"`
+	// Active is true when at least one model session runs on CUDA.
+	Active bool `json:"active"`
+	// Sessions lists the model sessions running on CUDA.
+	Sessions []inference.CUDASessionInfo `json:"sessions"`
+	// LastError is the most recent CUDA initialization failure, if any.
+	LastError string `json:"lastError,omitempty"`
+	// LastErrorAtUnix is when LastError happened (Unix seconds).
+	LastErrorAtUnix int64 `json:"lastErrorAtUnix,omitempty"`
+}
+
+// buildCUDABackendStatus combines the configured provider with the live CUDA
+// status from the inference layer. It is pure.
+func buildCUDABackendStatus(cfg *conf.BirdNETConfig, cuda *inference.CUDAStatus) CUDABackendStatus {
+	provider, err := inference.NormalizeExecutionProvider(cfg.ONNXProvider)
+	if err != nil {
+		provider = cfg.ONNXProvider
+	}
+	sessions := cuda.Sessions
+	if sessions == nil {
+		sessions = []inference.CUDASessionInfo{}
+	}
+	return CUDABackendStatus{
+		Provider:        provider,
+		Requested:       provider == inference.ExecutionProviderCUDA,
+		DeviceID:        cfg.CUDADeviceID,
+		LibraryPresent:  cuda.LibraryPresent,
+		Active:          len(sessions) > 0,
+		Sessions:        sessions,
+		LastError:       cuda.LastError,
+		LastErrorAtUnix: cuda.LastErrorAtUnix,
+	}
+}
+
+// applyCUDAToAccelerators corrects the NVIDIA accelerator rows for a build
+// that can run CUDA. The hardware probe marks every non-Intel GPU "no-runtime"
+// and judges reachability by the DRM render node, which CUDA does not use (the
+// NVIDIA Container Toolkit maps /dev/nvidia* instead). So when the CUDA
+// provider library is installed the no-runtime reason is dropped, and when a
+// model session is verifiably running on CUDA the card is reported reachable.
+func applyCUDAToAccelerators(accelerators []AcceleratorInfo, cuda *CUDABackendStatus) {
+	if !cuda.LibraryPresent {
+		return
+	}
+	for i := range accelerators {
+		acc := &accelerators[i]
+		if acc.Vendor != hwprofile.VendorNVIDIA {
+			continue
+		}
+		reasons := slices.DeleteFunc(slices.Clone(acc.Reasons), func(r string) bool {
+			if r == hwprofile.ReasonNoRuntime {
+				return true
+			}
+			return cuda.Active && (r == hwprofile.ReasonRenderNodeUnavailable || r == hwprofile.ReasonRenderNodePermission)
+		})
+		if cuda.Active {
+			acc.Accessible = true
+		}
+		if len(reasons) == 0 {
+			reasons = nil
+		}
+		acc.Reasons = reasons
+	}
 }
 
 // BackendStatus reports whether an inference backend is available and initialized.
@@ -557,6 +637,9 @@ func (c *Handler) GetInferenceStatus(ctx echo.Context) error {
 	})
 	envType, _ := sysinfo.GetEnvironment() // detail (sub-type) intentionally omitted in Phase 1
 	resp.Hardware = buildHardwareInfo(profile, envType)
+	cudaStatus := inference.GetCUDAStatus(settings.BirdNET.ONNXRuntimePath)
+	resp.Backends.CUDA = buildCUDABackendStatus(&settings.BirdNET, &cudaStatus)
+	applyCUDAToAccelerators(resp.Hardware.Accelerators, &resp.Backends.CUDA)
 
 	// Models: fetch loaded model list, RSS, and inference counters.
 	var infos []classifier.ModelInfo

@@ -13,6 +13,13 @@ ARG TENSORFLOW_VERSION=2.17.1
 # runtime-base stage downloads the matching prebuilt libtensorflowlite_c.so.
 ARG TFLITE_VERSION=v2.17.1
 ARG ONNXRUNTIME_VERSION=1.25.1
+# NVIDIA CUDA image variant (amd64 only; see the runtime-base-cuda stage). The GPU
+# build of ONNX Runtime must match ONNXRUNTIME_VERSION; its SHA256 is verified
+# before extraction. The CUDA libraries it links (CUDA 12 runtime, cuBLAS, cuFFT,
+# cuRAND, NVRTC and cuDNN 9) are copied from NVIDIA's official CUDA runtime image,
+# pinned by digest. Bump both together when ONNXRUNTIME_VERSION moves.
+ARG ONNXRUNTIME_GPU_SHA256=ddfc4ca4ccc9cd5345d3820edab710ee84e749569d052eed92c42693d3b448a8
+ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04@sha256:d02c4310b6d57ca0b16cd80298bdb33a74187baafe2eccd8a6a16180ddc90802
 # OpenVINO toolkit pin for the runtime libraries bundled into the images. Keep the
 # release/build in sync with the Taskfile OPENVINO_RELEASE / OPENVINO_BUILD values;
 # the SHA256s are per-arch (arm64 matches the Taskfile OPENVINO_SHA256 header pin).
@@ -360,6 +367,82 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
 
 # Refresh the loader cache once all runtime libraries are installed.
 RUN ldconfig
+
+# ============================================================================
+# runtime-base-cuda: runtime-base plus NVIDIA CUDA inference (amd64 only).
+#
+# Built only for the CUDA image variant (the -cuda tags, see
+# .github/workflows/docker-build-cuda.yml) by passing
+# --build-arg BASE_IMAGE=runtime-base-cuda; the standard images never include it,
+# so they stay CPU-sized. It replaces the CPU ONNX Runtime with the GPU build of
+# the SAME version (the GPU libonnxruntime also serves the CPU provider, so CPU
+# inference and every other backend keep working) and adds only the CUDA
+# libraries the ONNX Runtime CUDA provider links against, copied from NVIDIA's
+# CUDA runtime image rather than installing the whole toolkit. The NVIDIA driver
+# (libcuda) is NOT shipped: the NVIDIA Container Toolkit injects the host's
+# driver when the container starts with --gpus all. The license and copyright
+# files for the redistributed NVIDIA and ONNX Runtime components are kept under
+# /usr/share/doc.
+# ============================================================================
+FROM --platform=linux/amd64 ${CUDA_RUNTIME_IMAGE} AS cuda-libs
+
+# Gather only the CUDA 12 libraries libonnxruntime_providers_cuda.so links
+# (checked with readelf -d: cudart, cublas, cublasLt, cufft, curand, cudnn), plus
+# NVRTC and nvJitLink, which cuDNN 9 and cuFFT load at runtime, and the license
+# and copyright files that ship with them. `cp -a` keeps the soname symlinks as
+# symlinks; a wildcard COPY would dereference them and store every library twice.
+RUN set -eu; \
+    src=/usr/local/cuda-12.9/targets/x86_64-linux/lib; \
+    mkdir -p /cuda-min/lib /cuda-min/doc; \
+    for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcufft.so.11 libcurand.so.10 \
+               libnvrtc.so.12 libnvrtc-builtins.so.12.9 libnvJitLink.so.12; do \
+        cp -a "${src}/${lib}"* /cuda-min/lib/; \
+    done; \
+    cp -a /usr/lib/x86_64-linux-gnu/libcudnn*.so.9* /cuda-min/lib/; \
+    for doc in cuda-cudart-12-9 cuda-libraries-12-9 cuda-nvrtc-12-9 libcudnn9-cuda-12; do \
+        cp -a "/usr/share/doc/${doc}" /cuda-min/doc/; \
+    done; \
+    cp -a /NGC-DL-CONTAINER-LICENSE /cuda-min/doc/
+
+FROM runtime-base AS runtime-base-cuda
+ARG TARGETPLATFORM
+ARG ONNXRUNTIME_VERSION
+ARG ONNXRUNTIME_GPU_SHA256
+
+RUN set -eu; \
+    if [ "${TARGETPLATFORM}" != "linux/amd64" ]; then \
+        echo "Error: the CUDA image variant supports linux/amd64 only, got ${TARGETPLATFORM}" >&2; exit 1; \
+    fi; \
+    ORT_BASE="onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}"; \
+    echo "Downloading ONNX Runtime GPU ${ONNXRUNTIME_VERSION}"; \
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ORT_BASE}.tgz" \
+        -o /tmp/onnxruntime-gpu.tgz; \
+    echo "${ONNXRUNTIME_GPU_SHA256}  /tmp/onnxruntime-gpu.tgz" | sha256sum -c -; \
+    mkdir -p /tmp/ort-gpu /usr/share/doc/onnxruntime-gpu; \
+    tar --no-same-owner -xzf /tmp/onnxruntime-gpu.tgz -C /tmp/ort-gpu --strip-components=1; \
+    rm -f /usr/lib/libonnxruntime*.so*; \
+    cp -a /tmp/ort-gpu/lib/libonnxruntime.so* /usr/lib/; \
+    cp -a /tmp/ort-gpu/lib/libonnxruntime_providers_shared.so /usr/lib/; \
+    cp -a /tmp/ort-gpu/lib/libonnxruntime_providers_cuda.so /usr/lib/; \
+    cp -a /tmp/ort-gpu/LICENSE /tmp/ort-gpu/ThirdPartyNotices.txt /usr/share/doc/onnxruntime-gpu/; \
+    rm -rf /tmp/ort-gpu /tmp/onnxruntime-gpu.tgz
+
+COPY --from=cuda-libs /cuda-min/lib/ /usr/local/cuda/lib64/
+COPY --from=cuda-libs /cuda-min/doc/ /usr/share/doc/nvidia-cuda/
+
+# Register the CUDA library directory with the loader and fail the build if any
+# library the CUDA provider links is missing (libcuda comes from the host driver
+# at runtime and is excluded).
+RUN set -eu; \
+    echo /usr/local/cuda/lib64 > /etc/ld.so.conf.d/cuda.conf; \
+    ldconfig; \
+    missing=$(ldd /usr/lib/libonnxruntime_providers_cuda.so | grep "not found" || true); \
+    if [ -n "${missing}" ]; then echo "Error: unresolved CUDA provider libraries:" >&2; echo "${missing}" >&2; exit 1; fi
+
+# Let the NVIDIA Container Toolkit expose every GPU and inject the compute
+# (libcuda) and utility (nvidia-smi) driver components when run with --gpus.
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # ============================================================================
 # Stock model selection. arm64 ships ONNX-only stock models (the reduced-memory

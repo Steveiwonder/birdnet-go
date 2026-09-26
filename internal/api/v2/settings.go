@@ -2715,6 +2715,16 @@ func birdnetSettingsChanged(oldSettings, currentSettings *conf.Settings) bool {
 		return true
 	}
 
+	// Check for changes in the ONNX Runtime execution provider (CPU <-> CUDA) or
+	// the CUDA device. The ONNX Runtime library stays loaded; only the sessions are
+	// rebuilt on the new provider, so this is hot-reloadable. The reload builds
+	// the new sessions before closing the old ones, so a CUDA request that fails
+	// to initialize leaves the previous sessions serving and reports the error.
+	if oldSettings.BirdNET.ONNXProvider != currentSettings.BirdNET.ONNXProvider ||
+		oldSettings.BirdNET.CUDADeviceID != currentSettings.BirdNET.CUDADeviceID {
+		return true
+	}
+
 	return false
 }
 

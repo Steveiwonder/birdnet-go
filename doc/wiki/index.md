@@ -24,6 +24,7 @@ Welcome to the BirdNET-Go documentation. This index will help you navigate throu
 - [Detection Pipeline Architecture](detection-pipeline.md) - How audio flows through multi-model inference, filtering, and action dispatch
 - [ONNX Runtime Installation](onnx-runtime-installation.md) - Installing the default inference backend library for native/binary installs
 - [OpenVINO Acceleration](openvino-acceleration.md) - Enabling Intel iGPU offload and OpenVINO CPU acceleration on containers and native installs
+- [NVIDIA GPU (CUDA) Inference](nvidia-gpu.md) - Running ONNX models on an NVIDIA GPU with the CUDA image: requirements, configuration, verification and troubleshooting
 - [BirdNET Detection Pipeline](guide.md#birdnet-detection-pipeline) - Understanding how settings affect detections
 - [BirdNET Range Filter](guide.md#birdnet-range-filter) - Location and time-based species filtering
 - [Web Dashboard](guide.md#web-dashboard) - Using the visualization dashboard

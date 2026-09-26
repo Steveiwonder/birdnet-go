@@ -28,6 +28,10 @@ const (
 	ConfigKeyDebug       = "birdnet.debug"
 	ConfigKeyUseXNNPACK  = "birdnet.usexnnpack"
 
+	// Inference execution provider
+	ConfigKeyONNXProvider = "birdnet.onnxprovider"
+	ConfigKeyCUDADeviceID = "birdnet.cudadeviceid"
+
 	// Model Paths
 	ConfigKeyModelPath = "birdnet.modelpath"
 	ConfigKeyLabelPath = "birdnet.labelpath"
@@ -64,6 +68,10 @@ const (
 	EnvVarThreads     = "BIRDNET_THREADS"
 	EnvVarDebug       = "BIRDNET_DEBUG"
 	EnvVarUseXNNPACK  = "BIRDNET_USEXNNPACK"
+
+	// Inference execution provider
+	EnvVarONNXProvider = "BIRDNET_ONNXPROVIDER"
+	EnvVarCUDADeviceID = "BIRDNET_CUDADEVICEID"
 
 	// Model Paths
 	EnvVarModelPath = "BIRDNET_MODELPATH"
@@ -133,6 +141,8 @@ func getEnvBindings() []envBinding {
 		{ConfigKeyThreads, EnvVarThreads, validateEnvThreads},
 		{ConfigKeyDebug, EnvVarDebug, validateEnvBool},
 		{ConfigKeyUseXNNPACK, EnvVarUseXNNPACK, validateEnvBool},
+		{ConfigKeyONNXProvider, EnvVarONNXProvider, validateEnvONNXProvider},
+		{ConfigKeyCUDADeviceID, EnvVarCUDADeviceID, validateEnvCUDADeviceID},
 
 		// Model Paths
 		{ConfigKeyModelPath, EnvVarModelPath, validateEnvPath},
@@ -318,6 +328,26 @@ func validateEnvTLSMode(value string) error {
 	return nil
 }
 
+func validateEnvONNXProvider(value string) error {
+	value = strings.TrimSpace(strings.ToLower(value))
+	validProviders := []string{"", ONNXProviderCPU, ONNXProviderCUDA}
+	if !slices.Contains(validProviders, value) {
+		return fmt.Errorf("must be one of: %s, %s", ONNXProviderCPU, ONNXProviderCUDA)
+	}
+	return nil
+}
+
+func validateEnvCUDADeviceID(value string) error {
+	id, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("invalid CUDA device id: %w", err)
+	}
+	if id < 0 {
+		return fmt.Errorf("CUDA device id must be >= 0, got %d", id)
+	}
+	return nil
+}
+
 func validateEnvRangeFilterModel(value string) error {
 	value = strings.TrimSpace(value)
 	validModels := []string{RangeFilterModelLatest, RangeFilterModelLegacy, RangeFilterModelV3}
@@ -403,7 +433,7 @@ func canonicalizeValue(configKey, envValue string) {
 		}
 
 	// Integer values (ports are stored as strings but trimmed)
-	case ConfigKeyThreads:
+	case ConfigKeyThreads, ConfigKeyCUDADeviceID:
 		if parsed, err := strconv.Atoi(trimmed); err == nil {
 			viper.Set(configKey, parsed)
 		}
@@ -424,8 +454,8 @@ func canonicalizeValue(configKey, envValue string) {
 		// Canonicalize locale to lowercase
 		viper.Set(configKey, strings.ToLower(trimmed))
 
-	case ConfigKeySecurityTLSMode:
-		// TLS mode is case-insensitive; canonicalize to lowercase
+	case ConfigKeySecurityTLSMode, ConfigKeyONNXProvider:
+		// Case-insensitive enums; canonicalize to lowercase
 		viper.Set(configKey, strings.ToLower(trimmed))
 
 	case ConfigKeySecurityHost:

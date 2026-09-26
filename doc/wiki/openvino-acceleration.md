@@ -38,6 +38,10 @@ Two settings control OpenVINO. Both default to `auto`, which is almost always th
 | `birdnet.backend`        | `auto` (default), `onnx`, `openvino` | `auto` and `openvino` try OpenVINO where eligible and fall back to ORT. `onnx` disables OpenVINO entirely. |
 | `birdnet.openvinodevice` | `auto` (default), `cpu`, `gpu`       | Which OpenVINO device to target.                                                                           |
 
+Setting `birdnet.onnxprovider: cuda` (NVIDIA GPU, see
+[NVIDIA GPU (CUDA) Inference](nvidia-gpu.md)) takes precedence: models then run
+on ONNX Runtime's CUDA provider and OpenVINO is not used.
+
 Device resolution:
 
 - **`gpu`** - use an Intel GPU (iGPU/dGPU via the Intel GPU plugin). Requires the OpenCL/compute driver and `/dev/dri`. If no GPU is available, OpenVINO is declined and inference falls back to ORT.

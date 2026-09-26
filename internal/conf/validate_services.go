@@ -74,6 +74,8 @@ func ValidateBirdNETSettings(cfg *BirdNETConfig) ValidationResult {
 			fmt.Sprintf("BirdNET openvinodevice '%s' is not recognised; must be 'auto', 'cpu', or 'gpu' - will use 'auto'", cfg.OpenVINODevice))
 	}
 
+	validateONNXProvider(cfg, &result, &normalized)
+
 	// ModelRegion must be "auto", "global", or a well-formed region slug when
 	// non-empty. Validation is syntactic only: a well-formed but unknown slug is
 	// accepted (the per-family resolver degrades it to coordinates then global,
@@ -679,5 +681,34 @@ func NormalizeNtfyURL(raw string) string {
 func normalizeNtfyURLs(p *PushProviderConfig) {
 	for i, u := range p.URLs {
 		p.URLs[i] = NormalizeNtfyURL(u)
+	}
+}
+
+// validateONNXProvider checks the ONNX Runtime execution provider settings.
+// Unlike the backend preference, an unrecognised provider is an error, not a
+// warning: a user who asked for a GPU must not be silently run on the CPU.
+// CUDA is an ONNX Runtime provider, so it cannot be combined with forcing the
+// OpenVINO backend.
+func validateONNXProvider(cfg *BirdNETConfig, result *ValidationResult, normalized *BirdNETConfig) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.ONNXProvider))
+	switch provider {
+	case "", ONNXProviderCPU, ONNXProviderCUDA:
+		normalized.ONNXProvider = provider
+	default:
+		result.Valid = false
+		result.Errors = append(result.Errors,
+			fmt.Sprintf("BirdNET onnxprovider '%s' is not recognised; must be '%s' or '%s'", cfg.ONNXProvider, ONNXProviderCPU, ONNXProviderCUDA))
+		return
+	}
+
+	if cfg.CUDADeviceID < 0 {
+		result.Valid = false
+		result.Errors = append(result.Errors, "BirdNET cudadeviceid must be at least 0")
+	}
+
+	if provider == ONNXProviderCUDA && cfg.Backend == BackendPrefOpenVINO {
+		result.Valid = false
+		result.Errors = append(result.Errors,
+			"BirdNET onnxprovider 'cuda' cannot be combined with backend 'openvino'; set backend to 'auto' or 'onnx' to use CUDA")
 	}
 }

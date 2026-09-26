@@ -16,6 +16,9 @@ type Classifier struct {
 	minConf     float32
 	inputName   string
 	outputNames []string
+	// placement is the measured operator placement from the load-time probe,
+	// nil unless the classifier was built with WithPlacementProbe.
+	placement *NodePlacement
 }
 
 // ClassifierOption configures classifier behavior.
@@ -27,8 +30,9 @@ type classifierConfig struct {
 	labelsPath          string
 	topK                int
 	minConf             float32
-	sessionOptsFn       func(*ort.SessionOptions)
+	sessionOptsFn       sessionConfigurer
 	skipLabelValidation bool
+	probePlacement      bool
 }
 
 func defaultClassifierConfig() *classifierConfig {
@@ -74,7 +78,23 @@ func WithSkipLabelValidation() ClassifierOption {
 // The callback receives the options after defaults (IntraOpNumThreads=1, InterOpNumThreads=1)
 // have been set, allowing the caller to override or add execution providers.
 func WithSessionOptions(fn func(*ort.SessionOptions)) ClassifierOption {
+	return func(c *classifierConfig) { c.sessionOptsFn = infallible(fn) }
+}
+
+// WithSessionConfigurer is WithSessionOptions for a callback that can fail, such
+// as one that registers an execution provider. A non-nil error aborts session
+// creation, so a provider that cannot be attached never leaves a session that
+// silently runs on the default CPU provider instead.
+func WithSessionConfigurer(fn func(*ort.SessionOptions) error) ClassifierOption {
 	return func(c *classifierConfig) { c.sessionOptsFn = fn }
+}
+
+// WithPlacementProbe runs one profiled inference on silence at load time and
+// records which execution provider each operator actually ran on (see
+// Placement). Use it when an accelerator provider is registered through
+// WithSessionOptions, to prove the model really executes on the device.
+func WithPlacementProbe() ClassifierOption {
+	return func(c *classifierConfig) { c.probePlacement = true }
 }
 
 // NewClassifier creates a new Classifier from an ONNX model file.
@@ -120,6 +140,14 @@ func NewClassifier(modelPath string, opts ...ClassifierOption) (*Classifier, err
 		}
 	}
 
+	var placement *NodePlacement
+	if cfg.probePlacement {
+		placement, err = probeNodePlacement(modelPath, inputNames, outputNames, &modelCfg, cfg.sessionOptsFn)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Create ONNX session
 	session, err := createSession(modelPath, inputNames, outputNames, cfg.sessionOptsFn)
 	if err != nil {
@@ -134,7 +162,14 @@ func NewClassifier(modelPath string, opts ...ClassifierOption) (*Classifier, err
 		minConf:     cfg.minConf,
 		inputName:   inputNames[0],
 		outputNames: outputNames,
+		placement:   placement,
 	}, nil
+}
+
+// Placement returns the operator placement measured at load time, or nil when
+// the classifier was built without WithPlacementProbe.
+func (c *Classifier) Placement() *NodePlacement {
+	return c.placement
 }
 
 // loadModelMetadata reads input/output tensor names and shapes from the model file.
@@ -205,8 +240,23 @@ func validateLabelCount(modelCfg *ModelConfig, outputInfos []ort.InputOutputInfo
 	return nil
 }
 
+// sessionConfigurer adjusts ONNX Runtime session options before the session is
+// created; a non-nil error aborts session creation.
+type sessionConfigurer func(*ort.SessionOptions) error
+
+// infallible adapts a callback that cannot fail to a sessionConfigurer.
+func infallible(fn func(*ort.SessionOptions)) sessionConfigurer {
+	if fn == nil {
+		return nil
+	}
+	return func(so *ort.SessionOptions) error {
+		fn(so)
+		return nil
+	}
+}
+
 // createSession builds an ONNX Runtime session with default options.
-func createSession(modelPath string, inputNames, outputNames []string, sessionOptsFn func(*ort.SessionOptions)) (*ort.DynamicAdvancedSession, error) {
+func createSession(modelPath string, inputNames, outputNames []string, sessionOptsFn sessionConfigurer) (*ort.DynamicAdvancedSession, error) {
 	sessOpts, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: failed to create session options: %w", err)
@@ -221,7 +271,9 @@ func createSession(modelPath string, inputNames, outputNames []string, sessionOp
 	}
 
 	if sessionOptsFn != nil {
-		sessionOptsFn(sessOpts)
+		if err := sessionOptsFn(sessOpts); err != nil {
+			return nil, err
+		}
 	}
 
 	session, err := ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, sessOpts)

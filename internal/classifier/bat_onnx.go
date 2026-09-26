@@ -59,6 +59,11 @@ type BatModelConfig struct {
 	Backend        string // BirdNET.Backend ("auto"/"onnx"/"openvino")
 	OpenVINOPath   string // BirdNET.OpenVINOPath (libopenvino_c location)
 	OpenVINODevice string // BirdNET.OpenVINODevice ("auto"/"cpu"/"gpu")
+
+	// ExecutionProvider is the ONNX Runtime provider for the ORT path
+	// (BirdNET.ONNXProvider / CUDADeviceID). CUDA declines OpenVINO and never
+	// falls back to the CPU provider.
+	ExecutionProvider inference.ExecutionProviderOptions
 }
 
 // NewBat creates a new bat detection model instance.
@@ -103,6 +108,7 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 			Labels:              cfg.EmbeddingLabels,
 			Threads:             cfg.Threads,
 			SkipLabelValidation: true,
+			ExecutionProvider:   cfg.ExecutionProvider,
 		})
 		if cerr != nil {
 			batCC.Close()
@@ -122,10 +128,11 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 				Build()
 		}
 		embExtractor = ext
-		// The embedding extractor and the classifier both run on the ONNX Runtime CPU
-		// EP on this path. Surface the weight precision detected from the classifier
+		// The heavy embedding extractor runs on the configured ONNX Runtime provider
+		// (CPU, or CUDA when selected and verified); the tiny classifier head always
+		// stays on the CPU. Surface the weight precision detected from the classifier
 		// model filename (empty when no token, the common case for the bat model).
-		device = deviceCPU
+		device = onnxDeviceLabel(cfg.ExecutionProvider)
 		backend = BackendONNX
 		precision = string(detectQuantization(cfg.ClassifierModelPath))
 	}
@@ -166,6 +173,12 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 // f16. expectedDim is the bat classifier's input dimension, used to reject a wrong
 // output port before any inference.
 func tryBatOpenVINO(cfg *BatModelConfig, expectedDim int) (extractor inference.EmbeddingExtractor, device, precision string, ok bool) {
+	// An explicit CUDA selection runs the model on ONNX Runtime's CUDA provider;
+	// OpenVINO must not claim it first.
+	if cfg.ExecutionProvider.UsesCUDA() {
+		logOpenVINODeclined(RegistryIDBat, cfg.Backend, ovReasonCUDASelected)
+		return nil, "", "", false
+	}
 	log := GetLogger()
 
 	// openVINOPlanFor gates on the build tag, backend preference, and device

@@ -1,0 +1,163 @@
+name: Build CUDA container image
+
+# Builds the NVIDIA GPU (CUDA) variant of the BirdNET-Go image and publishes it
+# to this repository's GitHub Container Registry package
+# (ghcr.io/<owner>/<repo>, lower-cased), next to the standard images, under
+# -cuda tags only. The standard images and their workflows are unchanged.
+#
+# The variant is linux/amd64 only. It is the standard image with the CPU ONNX
+# Runtime swapped for the GPU build of the same version and the CUDA 12 / cuDNN 9
+# libraries the ONNX Runtime CUDA provider needs (the runtime-base-cuda stage of
+# the Dockerfile). CPU stays the default provider; select CUDA with
+# BIRDNET_ONNXPROVIDER=cuda (see doc/wiki/nvidia-gpu.md).
+#
+# Tags published:
+#   push to main        :cuda, :cuda-<sha7>
+#   push of a v* tag    :cuda-latest, :cuda-<tag>, :<tag>-cuda
+#   push to a branch    :cuda-<branch>, :cuda-<sha7>   (branch names containing
+#                       "gpu" or "cuda", so feature work can be tested)
+#   pull request        built and smoke-tested, never pushed
+
+concurrency:
+  group: docker-build-cuda-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+      - "**gpu**"
+      - "**cuda**"
+    tags:
+      - "v*"
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths:
+      - Dockerfile
+      - .github/workflows/docker-build-cuda.yml
+      - internal/inference/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PUSH_IMAGE: ${{ github.event_name != 'pull_request' }}
+    steps:
+      # The CUDA libraries add about 2.5 GB; the runner's preinstalled SDKs are
+      # not needed and would otherwise leave too little room for the build cache.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Login to GitHub Container Registry
+        if: env.PUSH_IMAGE == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          for attempt in 1 2 3; do
+            if echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin; then
+              exit 0
+            fi
+            echo "GHCR login attempt $attempt/3 failed, retrying in 15s..."
+            sleep 15
+          done
+          exit 1
+
+      - name: Generate tags
+        id: tags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          short="${SHA::7}"
+          # Docker tags allow [A-Za-z0-9_.-]; map anything else (e.g. "/") to "-".
+          slug=$(printf '%s' "${REF_NAME}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            tags="${repo}:cuda-pr-${short}"
+            version="pr-${short}-cuda"
+          elif [ "${REF_TYPE}" = "tag" ]; then
+            tags="${repo}:cuda-latest,${repo}:cuda-${slug},${repo}:${slug}-cuda"
+            version="${REF_NAME}-cuda"
+          elif [ "${REF_NAME}" = "main" ]; then
+            tags="${repo}:cuda,${repo}:cuda-${short}"
+            version="${short}-cuda"
+          else
+            tags="${repo}:cuda-${slug},${repo}:cuda-${short}"
+            version="${slug}-${short}-cuda"
+          fi
+          {
+            echo "tags=${tags}"
+            echo "first=${tags%%,*}"
+            echo "version=${version}"
+            echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tags: ${tags}"
+
+      - name: Build and push CUDA image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          # Pushed on branch and tag builds; a pull request only loads the image
+          # locally for the smoke test below.
+          push: ${{ env.PUSH_IMAGE == 'true' }}
+          load: ${{ env.PUSH_IMAGE != 'true' }}
+          build-args: |
+            BUILD_VERSION=${{ steps.tags.outputs.version }}
+            BASE_IMAGE=runtime-base-cuda
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=birdnet-go (NVIDIA CUDA)
+            org.opencontainers.image.description=BirdNET-Go with ONNX Runtime CUDA inference for NVIDIA GPUs (linux/amd64)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+            org.opencontainers.image.created=${{ steps.tags.outputs.created }}
+          cache-from: type=gha,scope=cuda
+          cache-to: type=gha,scope=cuda,mode=max
+          provenance: false
+
+      # No GPU on the runner, so this proves the image is assembled correctly,
+      # not that inference runs on a GPU: every library the CUDA provider links
+      # resolves, CPU inference still works with the GPU build of ONNX Runtime,
+      # and selecting CUDA without a GPU fails with a clear error instead of
+      # silently running on the CPU.
+      - name: Smoke test image
+        env:
+          IMAGE: ${{ steps.tags.outputs.first }}
+        run: |
+          set -euo pipefail
+          if [ "${PUSH_IMAGE}" = "true" ]; then docker pull "${IMAGE}"; fi
+          # The amd64 image ships TFLite stock models, so the ONNX model used for
+          # the inference check comes from the checkout.
+          docker run --rm -v "${PWD}/internal/classifier/data:/testdata:ro" --entrypoint sh "${IMAGE}" -c '
+            set -e
+            missing=$(ldd /usr/lib/libonnxruntime_providers_cuda.so | grep "not found" || true)
+            if [ -n "$missing" ]; then echo "unresolved: $missing"; exit 1; fi
+            test -f /usr/share/doc/onnxruntime-gpu/ThirdPartyNotices.txt
+            test -f /usr/share/doc/nvidia-cuda/NGC-DL-CONTAINER-LICENSE
+            out=$(birdnet-go cuda-benchmark --model /testdata/BirdNET_INT8_ARM.onnx --iterations 1 2>&1 || true)
+            echo "$out" | grep -E "^(cpu|cuda) "
+            echo "$out" | grep -qE "^cpu +[0-9]" || { echo "CPU inference failed"; exit 1; }
+            echo "$out" | grep -q "CUDA execution provider unavailable" || { echo "CUDA without a GPU did not fail as expected"; exit 1; }
+          '

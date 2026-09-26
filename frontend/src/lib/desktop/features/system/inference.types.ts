@@ -99,11 +99,47 @@ export interface OpenVINOBackendStatus {
   devices?: string[];
 }
 
+/** One model session running on the ONNX Runtime CUDA execution provider. */
+export interface CUDASessionInfo {
+  /** Model file name (base name only). */
+  model: string;
+  /** CUDA device ordinal the session runs on. */
+  deviceId: number;
+  /** Model operators measured running on the CUDA provider at load time. */
+  cudaNodes: number;
+  /** Model operators executed in the load-time probe. */
+  totalNodes: number;
+  /** Operator types ONNX Runtime left on the CPU provider. */
+  cpuOps?: string[];
+}
+
+/**
+ * ONNX Runtime CUDA execution provider status. `active` is true only when a
+ * model session is verifiably running on the GPU, never merely because a GPU
+ * or the GPU build of ONNX Runtime is present.
+ */
+export interface CUDABackendStatus {
+  /** Configured ONNX Runtime execution provider ("cpu" or "cuda"). */
+  provider: string;
+  /** True when CUDA is the configured provider. */
+  requested: boolean;
+  deviceId: number;
+  /** True when the installed ONNX Runtime is a GPU build. */
+  libraryPresent: boolean;
+  active: boolean;
+  sessions: CUDASessionInfo[];
+  /** Most recent CUDA initialization failure, if any. */
+  lastError?: string;
+  lastErrorAtUnix?: number;
+}
+
 /** Status for each supported inference backend. */
 export interface InferenceBackends {
   tflite: BackendStatus;
   onnx: BackendStatus;
   openvino: OpenVINOBackendStatus;
+  /** Absent when talking to a server that predates CUDA support. */
+  cuda?: CUDABackendStatus;
 }
 
 /** Audio input spec a model expects. */
@@ -321,4 +357,18 @@ export interface InferenceStatusResponse {
    * "load_failed"); "" is the API-only "no verdict yet" sentinel.
    */
   acousticModelsState: AcousticModelsStateWire;
+}
+
+/** Display state of the CUDA row on the inference page. */
+export type CUDARowState = 'active' | 'failed' | 'notInUse' | 'available' | 'unavailable';
+
+/**
+ * Derives the CUDA row state. A failed or unused CUDA selection is reported as
+ * such rather than as "available", so a user who asked for the GPU can see it is
+ * not being used.
+ */
+export function cudaRowState(cuda: CUDABackendStatus): CUDARowState {
+  if (cuda.active) return 'active';
+  if (cuda.requested) return cuda.lastError ? 'failed' : 'notInUse';
+  return cuda.libraryPresent ? 'available' : 'unavailable';
 }

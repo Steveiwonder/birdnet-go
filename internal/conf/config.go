@@ -1331,6 +1331,8 @@ type BirdNETConfig struct {
 	OpenVINOPath        string              `yaml:"openvinopath,omitempty" json:"openVinoPath,omitempty"`               // path to libopenvino_c shared library (OpenVINO image variants only)
 	Backend             string              `yaml:"backend,omitempty" json:"backend,omitempty"`                         // inference backend preference: "auto" (default), "onnx", or "openvino"
 	OpenVINODevice      string              `yaml:"openvinodevice,omitempty" json:"openVinoDevice,omitempty"`           // OpenVINO device preference: "auto" (default), "cpu", or "gpu"
+	ONNXProvider        string              `yaml:"onnxprovider,omitempty" json:"onnxProvider,omitempty"`               // ONNX Runtime execution provider for species classifiers: "cpu" (default) or "cuda" (NVIDIA GPU; fails instead of falling back to CPU)
+	CUDADeviceID        int                 `yaml:"cudadeviceid,omitempty" json:"cudaDeviceId,omitempty"`               // CUDA device ordinal used when onnxprovider is "cuda" (default 0)
 	HuggingFaceEndpoint string              `yaml:"huggingfaceendpoint,omitempty" json:"huggingFaceEndpoint,omitempty"` // model download host, e.g. "https://hf-mirror.com" where huggingface.co is blocked; empty falls back to $HF_ENDPOINT then https://huggingface.co
 	ModelRegion         string              `yaml:"modelregion,omitempty" json:"modelRegion,omitempty"`                 // regional model preference: "auto" (resolve from coordinates, default), "global" (always global models), or a region slug pin (e.g. "iberia"); empty is treated as "auto"
 }
@@ -1340,6 +1342,18 @@ const (
 	BackendPrefAuto     = "auto"
 	BackendPrefONNX     = "onnx"
 	BackendPrefOpenVINO = "openvino"
+)
+
+// ONNX Runtime execution providers for BirdNET.ONNXProvider. An empty string is
+// treated as "cpu", so existing configurations keep running on the CPU. "cuda"
+// runs ONNX species classifiers on an NVIDIA GPU; when it cannot be used the
+// model fails to load rather than silently running on the CPU. These mirror the
+// inference.ExecutionProvider* values, kept as literals so this foundational
+// package stays free of an inference dependency; a drift-guard test asserts
+// they stay equal.
+const (
+	ONNXProviderCPU  = "cpu"
+	ONNXProviderCUDA = "cuda"
 )
 
 // OpenVINO device preferences for BirdNET.OpenVINODevice. "auto" picks the GPU

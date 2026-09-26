@@ -30,6 +30,7 @@ const (
 	ovReasonNoDevice          = "no supported OpenVINO device (needs an ARMv8.2+/A76 CPU with native f16, or an Intel OpenVINO GPU)"
 	ovReasonNotBirdNETv24     = "model is not the stock BirdNET v2.4 classifier"
 	ovReasonNotPerchNoDFT     = "model is not the Perch no_dft variant"
+	ovReasonCUDASelected      = "onnxprovider is set to cuda, so ONNX Runtime runs the model on the NVIDIA GPU"
 	ovReasonUnverifiedWeights = "model weights are INT8 or of unrecognized precision, which overflow at f16 on the ARM CPU or are unvalidated on OpenVINO (set birdnet.backend to openvino to force OpenVINO at f32)"
 )
 
@@ -298,6 +299,9 @@ func (bn *BirdNET) openVINOPlan() (plan openVINOPlan, ok bool, reason string) {
 // precision token is treated as unverified (see applyOpenVINOQuantizationPolicy);
 // only a file whose name misstates its precision can still get the wrong plan.
 func birdnetV24OpenVINOPlan(cfg *conf.BirdNETConfig, quant Quantization) (plan openVINOPlan, ok bool, reason string) {
+	if executionProviderFor(cfg).UsesCUDA() {
+		return openVINOPlan{}, false, ovReasonCUDASelected
+	}
 	plan, ok, reason = birdnetV24BasePlan(cfg)
 	return applyOpenVINOQuantizationPolicy(plan, ok, reason, cfg.Backend, quant)
 }

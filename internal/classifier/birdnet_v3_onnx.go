@@ -55,6 +55,11 @@ type BirdNETV3Config struct {
 	Backend        string // BirdNET.Backend ("auto"/"onnx"/"openvino")
 	OpenVINOPath   string // BirdNET.OpenVINOPath (libopenvino_c location)
 	OpenVINODevice string // BirdNET.OpenVINODevice ("auto"/"cpu"/"gpu")
+
+	// ExecutionProvider is the ONNX Runtime provider for the ORT path
+	// (BirdNET.ONNXProvider / CUDADeviceID). CUDA declines OpenVINO and never
+	// falls back to the CPU provider.
+	ExecutionProvider inference.ExecutionProviderOptions
 }
 
 // NewBirdNETV3 creates a new BirdNET v3.0 model instance.
@@ -113,8 +118,9 @@ func NewBirdNETV3(cfg *BirdNETV3Config) (*BirdNETV3, error) {
 		// Create the ONNX Runtime classifier (the runtime was initialized above).
 		var cerr error
 		classifier, cerr = inference.NewONNXClassifier(cfg.ModelPath, inference.ONNXClassifierOptions{
-			Labels:  labels,
-			Threads: cfg.Threads,
+			Labels:            labels,
+			Threads:           cfg.Threads,
+			ExecutionProvider: cfg.ExecutionProvider,
 		})
 		if cerr != nil {
 			return nil, errors.New(cerr).
@@ -123,10 +129,11 @@ func NewBirdNETV3(cfg *BirdNETV3Config) (*BirdNETV3, error) {
 				Context("label_count", len(labels)).
 				Build()
 		}
-		// ONNX Runtime runs BirdNET v3.0 on the CPU execution provider, executing the
-		// model file as-is: surface the weight precision detected from the filename
-		// (e.g. FP16 for a *_fp16.onnx file; empty when no token).
-		device = deviceCPU
+		// ONNX Runtime runs BirdNET v3.0 on the configured execution provider (CPU,
+		// or CUDA when selected and verified), executing the model file as-is:
+		// surface the weight precision detected from the filename (e.g. FP16 for a
+		// *_fp16.onnx file; empty when no token).
+		device = onnxDeviceLabel(cfg.ExecutionProvider)
 		backend = BackendONNX
 		precision = string(detectQuantization(cfg.ModelPath))
 	}
@@ -161,6 +168,12 @@ func NewBirdNETV3(cfg *BirdNETV3Config) (*BirdNETV3, error) {
 // never make BirdNET v3.0 fail to load. Unlike Perch there is no model-variant filename
 // gate: the v3.0 GPU-native model has no STFT op, so it compiles on OpenVINO directly.
 func tryBirdNETV3OpenVINO(cfg *BirdNETV3Config, labels []string) (classifier inference.Classifier, device, precision string, ok bool) {
+	// An explicit CUDA selection runs the model on ONNX Runtime's CUDA provider;
+	// OpenVINO must not claim it first.
+	if cfg.ExecutionProvider.UsesCUDA() {
+		logOpenVINODeclined(RegistryIDBirdNETV3, cfg.Backend, ovReasonCUDASelected)
+		return nil, "", "", false
+	}
 	// openVINOPlanFor gates on the build tag, backend preference, and device
 	// availability without needing the output port, so run it first; only read the
 	// model metadata to resolve the predictions port once OpenVINO is actually in

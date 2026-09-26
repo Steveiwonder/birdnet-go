@@ -1634,4 +1634,68 @@ describe('SystemInference', () => {
     });
     expect(container.textContent).toContain('Microphone');
   });
+
+  describe('CUDA backend row', () => {
+    const CUDA_LABEL_KEY = 'system.inference.backendCuda';
+
+    function withCuda(cuda: NonNullable<InferenceStatusResponse['backends']['cuda']>) {
+      const snapshot = makeSnapshot([makeModel({})]);
+      snapshot.backends.cuda = cuda;
+      return snapshot;
+    }
+
+    it('hides the row for a server that reports no cuda block', async () => {
+      installApi(makeSnapshot([makeModel({})]));
+      const { container } = inferenceTest.render({});
+      await waitFor(() => {
+        expect(container.textContent).toContain('system.inference.sectionBackends');
+      });
+      expect(container.textContent).not.toContain(CUDA_LABEL_KEY);
+    });
+
+    it('shows active CUDA sessions with their measured operator placement', async () => {
+      installApi(
+        withCuda({
+          provider: 'cuda',
+          requested: true,
+          deviceId: 0,
+          libraryPresent: true,
+          active: true,
+          sessions: [
+            { model: 'BirdNET_v2.4_fp32.onnx', deviceId: 0, cudaNodes: 90, totalNodes: 96 },
+          ],
+        })
+      );
+      const { container } = inferenceTest.render({});
+      await waitFor(() => {
+        expect(container.textContent).toContain(CUDA_LABEL_KEY);
+      });
+      expect(container.textContent).toContain('system.inference.active');
+      expect(container.textContent).toContain('system.inference.cudaOpsOnGpu');
+      expect(t).toHaveBeenCalledWith('system.inference.cudaOpsOnGpu', {
+        model: 'BirdNET_v2.4_fp32.onnx',
+        gpu: 90,
+        total: 96,
+      });
+    });
+
+    it('shows a failed CUDA selection with its error instead of reporting it available', async () => {
+      installApi(
+        withCuda({
+          provider: 'cuda',
+          requested: true,
+          deviceId: 0,
+          libraryPresent: false,
+          active: false,
+          sessions: [],
+          lastError: 'CUDA execution provider unavailable (device 0)',
+        })
+      );
+      const { container } = inferenceTest.render({});
+      await waitFor(() => {
+        expect(container.textContent).toContain('system.inference.cudaFailed');
+      });
+      expect(container.textContent).toContain('CUDA execution provider unavailable (device 0)');
+    });
+  });
 });
