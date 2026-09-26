@@ -35,8 +35,9 @@ type Perch struct {
 	info       ModelInfo
 	mu         sync.Mutex
 	// device is the compute device the classifier bound to: the OpenVINO device
-	// (CPU/GPU) when the OV path succeeds, otherwise deviceCPU for the ONNX
-	// Runtime CPU EP. Set once at construction; reported via RuntimeInfo().
+	// (CPU/GPU) when the OV path succeeds, otherwise the ONNX Runtime provider's
+	// device (deviceCPU, or CUDA:<id> on the CUDA provider). Set once at
+	// construction; reported via RuntimeInfo().
 	device string
 	// backend is the live execution backend (BackendOpenVINO on the OV path, else
 	// BackendONNX), and precision is the effective runtime precision (on the OV
@@ -66,6 +67,11 @@ type PerchConfig struct {
 	Backend        string // BirdNET.Backend ("auto"/"onnx"/"openvino")
 	OpenVINOPath   string // BirdNET.OpenVINOPath (libopenvino_c location)
 	OpenVINODevice string // BirdNET.OpenVINODevice ("auto"/"cpu"/"gpu")
+
+	// ExecutionProvider is the ONNX Runtime provider for the ORT path
+	// (BirdNET.ONNXProvider / CUDADeviceID). CUDA declines OpenVINO and never
+	// falls back to the CPU provider.
+	ExecutionProvider inference.ExecutionProviderOptions
 }
 
 // NewPerch creates a new Perch v2 model instance.
@@ -99,7 +105,7 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 	// falling back to ORT on any failure. OpenVINO must never make Perch fail to
 	// load, so tryPerchOpenVINO logs and swallows OV errors and returns ok=false.
 	// device records the compute device actually bound to (the OpenVINO device on
-	// the OV path, else the ONNX Runtime CPU EP).
+	// the OV path, else the ONNX Runtime provider's device).
 	classifier, device, precisionHint, ok := tryPerchOpenVINO(cfg, labels)
 	// On the OV path the effective runtime precision follows the compiled
 	// INFERENCE_PRECISION_HINT (f32 on the GPU per openVINOPrecisionFor, else the
@@ -118,8 +124,9 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 		// Create ONNX classifier
 		var cerr error
 		classifier, cerr = inference.NewONNXClassifier(cfg.ModelPath, inference.ONNXClassifierOptions{
-			Labels:  labels,
-			Threads: cfg.Threads,
+			Labels:            labels,
+			Threads:           cfg.Threads,
+			ExecutionProvider: cfg.ExecutionProvider,
 		})
 		if cerr != nil {
 			return nil, errors.New(cerr).
@@ -128,10 +135,11 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 				Context("label_count", len(labels)).
 				Build()
 		}
-		// ONNX Runtime currently runs Perch on the CPU execution provider, executing
-		// the model file as-is: surface the weight precision detected from the
-		// filename (e.g. INT8 for perch_v2_int8_arm.onnx; empty when no token).
-		device = deviceCPU
+		// ONNX Runtime runs Perch on the configured execution provider (CPU, or
+		// CUDA when selected and verified), executing the model file as-is:
+		// surface the weight precision detected from the filename (e.g. INT8 for
+		// perch_v2_int8_arm.onnx; empty when no token).
+		device = onnxDeviceLabel(cfg.ExecutionProvider)
 		backend = BackendONNX
 		precision = string(detectQuantization(cfg.ModelPath))
 	}
@@ -146,6 +154,8 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 
 	log.Info("Perch v2 model initialized",
 		logger.String("model_path", cfg.ModelPath),
+		logger.String("backend", backend),
+		logger.String("device", device),
 		logger.Int("species", len(labels)))
 
 	return &Perch{
@@ -170,6 +180,9 @@ func NewPerch(cfg *PerchConfig) (*Perch, error) {
 // variant, since the stock perch_v2.onnx cannot compile on OpenVINO (a
 // dynamic-rank DFT op).
 func tryPerchOpenVINO(cfg *PerchConfig, labels []string) (classifier inference.Classifier, device, precisionHint string, ok bool) {
+	if cudaDeclinesOpenVINO(RegistryIDPerchV2, cfg.Backend, cfg.ExecutionProvider) {
+		return nil, "", "", false
+	}
 	if !isPerchNoDFT(cfg.ModelPath) {
 		logOpenVINODeclined(RegistryIDPerchV2, cfg.Backend, ovReasonNotPerchNoDFT)
 		return nil, "", "", false

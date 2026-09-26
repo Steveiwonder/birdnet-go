@@ -74,6 +74,8 @@ func ValidateBirdNETSettings(cfg *BirdNETConfig) ValidationResult {
 			fmt.Sprintf("BirdNET openvinodevice '%s' is not recognised; must be 'auto', 'cpu', or 'gpu' - will use 'auto'", cfg.OpenVINODevice))
 	}
 
+	validateONNXProvider(cfg, &result, &normalized)
+
 	// ModelRegion must be "auto", "global", or a well-formed region slug when
 	// non-empty. Validation is syntactic only: a well-formed but unknown slug is
 	// accepted (the per-family resolver degrades it to coordinates then global,
@@ -679,5 +681,45 @@ func NormalizeNtfyURL(raw string) string {
 func normalizeNtfyURLs(p *PushProviderConfig) {
 	for i, u := range p.URLs {
 		p.URLs[i] = NormalizeNtfyURL(u)
+	}
+}
+
+// validateONNXProvider checks the ONNX Runtime execution provider settings.
+// Unlike the backend preference, an unrecognised provider is an error, not a
+// warning: a user who asked for a GPU must not be silently run on the CPU.
+// CUDA is an ONNX Runtime provider, so it cannot be combined with forcing the
+// OpenVINO backend.
+func validateONNXProvider(cfg *BirdNETConfig, result *ValidationResult, normalized *BirdNETConfig) {
+	provider, ok := normalizeONNXProvider(cfg.ONNXProvider)
+	if !ok {
+		result.Valid = false
+		result.Errors = append(result.Errors,
+			fmt.Sprintf("BirdNET onnxprovider '%s' is not recognised; must be '%s' or '%s'", cfg.ONNXProvider, ONNXProviderCPU, ONNXProviderCUDA))
+		return
+	}
+	normalized.ONNXProvider = provider
+
+	if cfg.CUDADeviceID < 0 {
+		result.Valid = false
+		result.Errors = append(result.Errors, "BirdNET cudadeviceid must be at least 0")
+	}
+
+	if provider == ONNXProviderCUDA && strings.EqualFold(strings.TrimSpace(cfg.Backend), BackendPrefOpenVINO) {
+		result.Valid = false
+		result.Errors = append(result.Errors,
+			"BirdNET onnxprovider 'cuda' cannot be combined with backend 'openvino'; set backend to 'auto' or 'onnx' to use CUDA")
+	}
+}
+
+// normalizeONNXProvider lowercases and trims a configured ONNX Runtime
+// execution provider and reports whether it is one of the accepted values
+// ("" meaning the CPU default, "cpu" or "cuda").
+func normalizeONNXProvider(value string) (string, bool) {
+	provider := strings.ToLower(strings.TrimSpace(value))
+	switch provider {
+	case "", ONNXProviderCPU, ONNXProviderCUDA:
+		return provider, true
+	default:
+		return "", false
 	}
 }

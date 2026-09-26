@@ -27,6 +27,16 @@ BirdNET-Go Docker images are available from two registries:
 
 Both registries contain identical images. You can use either registry interchangeably in all examples below.
 
+### NVIDIA GPU (CUDA) Image
+
+For inference on an NVIDIA GPU there is a separate linux/amd64 image variant
+with `cuda` tags, published to the GitHub Container Registry of the repository
+that builds it (for this fork, `ghcr.io/steveiwonder/birdnet-go:cuda`). It
+needs the NVIDIA driver and the NVIDIA Container Toolkit on the host, is started
+with `--gpus all`, and uses the CPU until you set `BIRDNET_ONNXPROVIDER=cuda`
+and select an ONNX model. See [NVIDIA GPU (CUDA) Inference](nvidia-gpu.md) for
+requirements, setup, verification and troubleshooting.
+
 ## Recommended Method: `install.sh` (Linux)
 
 This script streamlines the installation process on compatible Linux systems (Debian 11+, Ubuntu 20.04+, Raspberry Pi OS 64-bit Bullseye or newer).
@@ -222,6 +232,8 @@ docker run -ti --rm \\
 - Ensure the user running the command has the correct permissions to access Docker and the specified host directories.
 - You will need to manually create/edit the `config.yaml` file in your mapped config directory. Refer to the [Configuration](guide.md#configuration) section in the Wiki.
 - You are responsible for managing the container's lifecycle (starting, stopping, updating).
+- For an NVIDIA GPU, use the `cuda` image, add `--gpus all` and
+  `--env BIRDNET_ONNXPROVIDER=cuda`; see [NVIDIA GPU (CUDA) Inference](nvidia-gpu.md).
 
 ## Manual Binary Installation (All platforms)
 

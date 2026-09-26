@@ -64,9 +64,11 @@ func (bn *BirdNET) initializeONNXModel() error {
 			Build()
 	}
 
+	ep := executionProviderFor(&settings.BirdNET)
 	classifier, err := inference.NewONNXClassifier(modelPath, inference.ONNXClassifierOptions{
-		Labels:  settings.BirdNET.Labels,
-		Threads: settings.BirdNET.Threads,
+		Labels:            settings.BirdNET.Labels,
+		Threads:           settings.BirdNET.Threads,
+		ExecutionProvider: ep,
 	})
 	if err != nil {
 		return errors.New(err).
@@ -77,16 +79,51 @@ func (bn *BirdNET) initializeONNXModel() error {
 	}
 
 	bn.classifier = classifier
-	// We ship only the CPU execution provider for ONNX Runtime today (other ORT
-	// EPs like CUDA/DirectML/CoreML would set the device from the bound provider).
-	// ONNX Runtime executes the model file as-is, so the runtime precision is the
+	// The device is the execution provider the session was built on: the CPU
+	// provider, or CUDA:<id> once NewONNXClassifier has verified that operators
+	// really ran on the GPU (a CUDA request never yields a CPU session). ONNX
+	// Runtime executes the model file as-is, so the runtime precision is the
 	// weight precision recorded in ModelInfo.Quantization (e.g. INT8 for the arm64
 	// int8 variant, FP32 for an fp32 ONNX model).
-	bn.setRuntimeInfo(deviceCPU, BackendONNX, string(bn.ModelInfo.Quantization))
+	device := onnxDeviceLabel(ep)
+	bn.setRuntimeInfo(device, BackendONNX, string(bn.ModelInfo.Quantization))
 
 	log.Info("ONNX model initialized",
 		logger.String("model", modelPath),
+		logger.String("execution_provider", ep.Provider),
+		logger.String("device", device),
 		logger.Int("species", classifier.NumSpecies()))
 
 	return nil
+}
+
+// executionProviderFor returns the ONNX Runtime execution provider selected in
+// a settings snapshot. The provider name is canonicalized; an unrecognised
+// value is passed through unchanged so NewONNXClassifier rejects it with a clear
+// error rather than it silently becoming CPU.
+func executionProviderFor(cfg *conf.BirdNETConfig) inference.ExecutionProviderOptions {
+	return inference.ResolveExecutionProvider(cfg.ONNXProvider, cfg.CUDADeviceID)
+}
+
+// onnxDeviceLabel is the runtime device reported for an ONNX Runtime session
+// built with ep: "CUDA:<id>" for CUDA, otherwise "CPU".
+func onnxDeviceLabel(ep inference.ExecutionProviderOptions) string {
+	if ep.UsesCUDA() {
+		return inference.CUDADeviceLabel(ep.DeviceID)
+	}
+	return deviceCPU
+}
+
+// errCUDARequiresONNX builds the error for a CUDA selection with a TFLite
+// primary model, which has no CUDA path: running it would silently use the CPU.
+func errCUDARequiresONNX(modelID, modelPath string) error {
+	err := errors.Newf("onnxprovider is set to cuda but the %s model is a TFLite model, which cannot run on CUDA; "+
+		"install an ONNX variant (for example the BirdNET v2.4 FP32 ONNX model) or set birdnet.onnxprovider to cpu", modelID).
+		Component("classifier").
+		Category(errors.CategoryModelInit).
+		Context("operation", "select_execution_provider").
+		ModelContext(modelPath, modelID).
+		Build()
+	inference.RecordCUDAFailure(err)
+	return err
 }

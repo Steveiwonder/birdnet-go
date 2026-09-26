@@ -1362,6 +1362,11 @@ export type TranslationKey =
   | 'system.inference.backendTflite'
   | 'system.inference.backendOnnx'
   | 'system.inference.backendOpenvino'
+  | 'system.inference.backendCuda'
+  | 'system.inference.cudaFailed'
+  | 'system.inference.cudaNotInUse'
+  | 'system.inference.cudaOpsOnGpu' // params: model, gpu, total
+  | 'system.inference.cudaCpuOps' // params: ops
   | 'system.inference.available'
   | 'system.inference.notAvailable'
   | 'system.inference.active'
@@ -4481,6 +4486,12 @@ export type TranslationParams = {
   };
   'system.database.migration.prerequisites.criticalCount': { count: string | number };
   'system.database.migration.prerequisites.warningCount': { count: string | number };
+  'system.inference.cudaOpsOnGpu': {
+    model: string | number;
+    gpu: string | number;
+    total: string | number;
+  };
+  'system.inference.cudaCpuOps': { ops: string | number };
   'system.inference.sourcesDegraded': { count: string | number; total: string | number };
   'system.inference.coDetectedHelp': { seconds: string | number };
   'system.inference.modelFailingHelp': { reason: string | number };

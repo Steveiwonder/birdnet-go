@@ -44,13 +44,14 @@ func (o *Orchestrator) buildPerch(settings *conf.Settings, threads int) (*Perch,
 	}
 
 	cfg := PerchConfig{
-		ModelPath:       modelPath,
-		LabelPath:       labelPath,
-		ONNXRuntimePath: settings.BirdNET.ONNXRuntimePath,
-		Threads:         threads,
-		Backend:         settings.BirdNET.Backend,
-		OpenVINOPath:    settings.BirdNET.OpenVINOPath,
-		OpenVINODevice:  settings.BirdNET.OpenVINODevice,
+		ModelPath:         modelPath,
+		LabelPath:         labelPath,
+		ONNXRuntimePath:   settings.BirdNET.ONNXRuntimePath,
+		Threads:           threads,
+		Backend:           settings.BirdNET.Backend,
+		OpenVINOPath:      settings.BirdNET.OpenVINOPath,
+		OpenVINODevice:    settings.BirdNET.OpenVINODevice,
+		ExecutionProvider: executionProviderFor(&settings.BirdNET),
 	}
 
 	perch, err := NewPerch(&cfg)

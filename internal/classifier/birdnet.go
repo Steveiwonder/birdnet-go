@@ -381,6 +381,9 @@ func (bn *BirdNET) usesONNXBackend() bool {
 // so the chosen backend is never silent in the journal.
 func (bn *BirdNET) initializeModel() error {
 	if !bn.usesONNXBackend() {
+		if executionProviderFor(&bn.Settings.BirdNET).UsesCUDA() {
+			return errCUDARequiresONNX(bn.ModelInfo.ID, bn.configuredModelPath())
+		}
 		return bn.initializeTFLiteModel()
 	}
 	if _, ok, reason := bn.openVINOPlan(); ok {

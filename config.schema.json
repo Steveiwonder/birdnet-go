@@ -487,6 +487,14 @@
           "type": "string",
           "description": "OpenVINO device preference: \"auto\" (default), \"cpu\", or \"gpu\""
         },
+        "onnxprovider": {
+          "type": "string",
+          "description": "ONNX Runtime execution provider for species classifiers: \"cpu\" (default) or \"cuda\" (NVIDIA GPU; fails instead of falling back to CPU)"
+        },
+        "cudadeviceid": {
+          "type": "integer",
+          "description": "CUDA device ordinal used when onnxprovider is \"cuda\" (default 0)"
+        },
         "huggingfaceendpoint": {
           "type": "string",
           "description": "model download host, e.g. \"https://hf-mirror.com\" where huggingface.co is blocked; empty falls back to $HF_ENDPOINT then https://huggingface.co"

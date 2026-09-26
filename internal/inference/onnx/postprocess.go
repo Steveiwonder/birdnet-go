@@ -89,3 +89,11 @@ func topK(scores []float32, labels []string, k int, minConf float32) []Predictio
 	}
 	return preds
 }
+
+// Activate converts a model's raw output (as returned by PredictRaw) into
+// per-class scores the way Predict does for that model type: sigmoid for
+// BirdNET v2.4, pass-through for BirdNET v3.0 (activated in-graph), softmax
+// for Perch v2. The result never aliases raw.
+func Activate(mt ModelType, raw []float32) []float32 {
+	return activationFor(mt, raw)
+}

@@ -25,7 +25,7 @@ type CustomClassifierBuilder struct {
 	labels        []string
 	topK          int
 	minConf       float32
-	sessionOptsFn func(*ort.SessionOptions)
+	sessionOptsFn sessionConfigurer
 }
 
 // NewCustomClassifierBuilder creates a new builder.
@@ -65,7 +65,7 @@ func (b *CustomClassifierBuilder) MinConfidence(threshold float32) *CustomClassi
 
 // SessionOptions provides a callback to configure the ONNX Runtime session options.
 func (b *CustomClassifierBuilder) SessionOptions(fn func(*ort.SessionOptions)) *CustomClassifierBuilder {
-	b.sessionOptsFn = fn
+	b.sessionOptsFn = infallible(fn)
 	return b
 }
 

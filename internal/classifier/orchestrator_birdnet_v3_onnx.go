@@ -44,13 +44,14 @@ func (o *Orchestrator) buildBirdNETV3(settings *conf.Settings, threads int) (*Bi
 	}
 
 	cfg := BirdNETV3Config{
-		ModelPath:       modelPath,
-		LabelPath:       labelPath,
-		ONNXRuntimePath: settings.BirdNET.ONNXRuntimePath,
-		Threads:         threads,
-		Backend:         settings.BirdNET.Backend,
-		OpenVINOPath:    settings.BirdNET.OpenVINOPath,
-		OpenVINODevice:  settings.BirdNET.OpenVINODevice,
+		ModelPath:         modelPath,
+		LabelPath:         labelPath,
+		ONNXRuntimePath:   settings.BirdNET.ONNXRuntimePath,
+		Threads:           threads,
+		Backend:           settings.BirdNET.Backend,
+		OpenVINOPath:      settings.BirdNET.OpenVINOPath,
+		OpenVINODevice:    settings.BirdNET.OpenVINODevice,
+		ExecutionProvider: executionProviderFor(&settings.BirdNET),
 	}
 
 	model, err := NewBirdNETV3(&cfg)

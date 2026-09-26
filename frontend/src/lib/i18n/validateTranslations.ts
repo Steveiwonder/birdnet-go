@@ -106,6 +106,8 @@ const SKIP_UNTRANSLATED_KEYWORDS = [
   'onnx',
   'tflite',
   'openvino',
+  'nvidia',
+  'cuda',
   'perch',
   'perchv2',
   'rtf',

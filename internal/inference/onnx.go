@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	ort "github.com/tphakala/birdnet-go/internal/inference/onnx"
+	"github.com/tphakala/birdnet-go/internal/logger"
 	ortlib "github.com/yalue/onnxruntime_go"
 )
 
@@ -33,12 +35,17 @@ type ONNXClassifierOptions struct {
 	// Use when the model is loaded only for embedding extraction and the
 	// caller's label list may not match the model's logits dimension.
 	SkipLabelValidation bool
+	// ExecutionProvider selects CPU (default) or CUDA. When CUDA is selected
+	// and cannot be used, construction fails; it never falls back to CPU.
+	ExecutionProvider ExecutionProviderOptions
 }
 
 // onnxClassifier implements Classifier using an ONNX Runtime session.
 type onnxClassifier struct {
 	classifier *ort.Classifier
 	numSpecies int
+	// cudaSession is the CUDA registry id, 0 for a CPU session.
+	cudaSession uint64
 }
 
 // NewONNXClassifier creates a Classifier backed by an ONNX Runtime model.
@@ -60,17 +67,51 @@ func NewONNXClassifier(modelPath string, opts ONNXClassifierOptions) (Classifier
 	if threads <= 0 {
 		threads = runtime.NumCPU()
 	}
+	ep := opts.ExecutionProvider
+	provider, err := NormalizeExecutionProvider(ep.Provider)
+	if err != nil {
+		return nil, err
+	}
+	ep.Provider = provider
+
 	var configErr error
-	classifierOpts = append(classifierOpts, ort.WithSessionOptions(func(so *ortlib.SessionOptions) {
+	// providerErr records a failure to register the CUDA provider. It aborts
+	// session creation, so a CUDA request never yields a CPU session.
+	var providerErr error
+	classifierOpts = append(classifierOpts, ort.WithSessionConfigurer(func(so *ortlib.SessionOptions) error {
 		if err := so.SetIntraOpNumThreads(threads); err != nil && configErr == nil {
 			configErr = fmt.Errorf("failed to set IntraOpNumThreads to %d: %w", threads, err)
 		}
 		if err := so.SetInterOpNumThreads(threads); err != nil && configErr == nil {
 			configErr = fmt.Errorf("failed to set InterOpNumThreads to %d: %w", threads, err)
 		}
+		if ep.UsesCUDA() {
+			if err := appendCUDAProvider(so, ep.DeviceID); err != nil {
+				providerErr = cudaInitError("provider registration", ep.DeviceID, err)
+				return providerErr
+			}
+		}
+		return nil
 	}))
+	if ep.UsesCUDA() {
+		// Measure where the operators really run; registering the provider alone
+		// does not prove the model executes on the GPU.
+		classifierOpts = append(classifierOpts, ort.WithPlacementProbe())
+	}
 	classifier, err := ort.NewClassifier(modelPath, classifierOpts...)
 	if err != nil {
+		switch {
+		case providerErr != nil:
+			return nil, providerErr
+		case ep.UsesCUDA() && isCUDARuntimeError(modelPath, err):
+			return nil, cudaInitError("session creation", ep.DeviceID, err)
+		case ep.UsesCUDA():
+			// Not a CUDA stack error (for example a bad model file or a failed
+			// placement probe), but the CUDA load still failed: report it.
+			wrapped := fmt.Errorf("failed to create ONNX classifier on CUDA device %d: %w", ep.DeviceID, err)
+			cudaRegistry.recordError(wrapped)
+			return nil, wrapped
+		}
 		return nil, fmt.Errorf("failed to create ONNX classifier: %w", err)
 	}
 	if configErr != nil {
@@ -78,10 +119,49 @@ func NewONNXClassifier(modelPath string, opts ONNXClassifierOptions) (Classifier
 		return nil, fmt.Errorf("failed to configure ONNX session options: %w", configErr)
 	}
 
-	return &onnxClassifier{
+	c := &onnxClassifier{
 		classifier: classifier,
 		numSpecies: len(opts.Labels),
-	}, nil
+	}
+	if ep.UsesCUDA() {
+		placement := classifier.Placement()
+		if err := verifyCUDAPlacement(modelPath, ep.DeviceID, placement); err != nil {
+			_ = classifier.Close()
+			return nil, err
+		}
+		info := CUDASessionInfo{
+			Model:      filepath.Base(modelPath),
+			DeviceID:   ep.DeviceID,
+			CUDANodes:  placement.Count(ort.ProviderCUDA),
+			TotalNodes: placement.Total,
+			CPUOps:     placement.Ops(ort.ProviderCPU),
+		}
+		c.cudaSession = cudaRegistry.add(info)
+		logger.Global().Module("inference").Info("ONNX Runtime CUDA execution provider active",
+			logger.String("model", info.Model),
+			logger.String("device", CUDADeviceLabel(info.DeviceID)),
+			logger.Int("cuda_nodes", info.CUDANodes),
+			logger.Int("total_nodes", info.TotalNodes),
+			logger.String("cpu_ops", strings.Join(info.CPUOps, ",")))
+	}
+	return c, nil
+}
+
+// Placement returns the operator placement measured when the classifier was
+// loaded, or nil for a CPU session (which is not probed).
+func (c *onnxClassifier) Placement() *ort.NodePlacement {
+	if c.classifier == nil {
+		return nil
+	}
+	return c.classifier.Placement()
+}
+
+// isCUDARuntimeError reports whether an ONNX Runtime session error came from
+// the CUDA stack (driver, runtime, cuDNN or cuBLAS) rather than the model. The
+// model path is removed first so a file or directory named "cuda" cannot match.
+func isCUDARuntimeError(modelPath string, err error) bool {
+	m := strings.ToLower(strings.ReplaceAll(err.Error(), modelPath, ""))
+	return strings.Contains(m, "cuda") || strings.Contains(m, "cudnn") || strings.Contains(m, "cublas")
 }
 
 // Predict runs ONNX inference, returning raw logits (pre-activation).
@@ -110,6 +190,10 @@ func (c *onnxClassifier) Close() {
 	if c.classifier != nil {
 		_ = c.classifier.Close()
 		c.classifier = nil
+		if c.cudaSession != 0 {
+			cudaRegistry.remove(c.cudaSession)
+			c.cudaSession = 0
+		}
 	}
 }
 

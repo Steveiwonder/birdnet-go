@@ -22,8 +22,9 @@ type Bat struct {
 	info               ModelInfo
 	mu                 sync.Mutex
 	// device is the compute device the bat pipeline bound to: the OpenVINO device
-	// (CPU/GPU) when the heavy embedding extractor runs on OpenVINO, otherwise
-	// deviceCPU for the ONNX Runtime CPU EP. The tiny bat classifier head always runs
+	// (CPU/GPU) when the heavy embedding extractor runs on OpenVINO, otherwise the
+	// ONNX Runtime provider's device (deviceCPU, or CUDA:<id> when CUDA is
+	// selected; see onnxDeviceLabel). The tiny bat classifier head always runs
 	// on ORT CPU, so this reports the embedding extractor's device. Set once at
 	// construction; reported via RuntimeInfo().
 	device string
@@ -59,6 +60,11 @@ type BatModelConfig struct {
 	Backend        string // BirdNET.Backend ("auto"/"onnx"/"openvino")
 	OpenVINOPath   string // BirdNET.OpenVINOPath (libopenvino_c location)
 	OpenVINODevice string // BirdNET.OpenVINODevice ("auto"/"cpu"/"gpu")
+
+	// ExecutionProvider is the ONNX Runtime provider for the ORT path
+	// (BirdNET.ONNXProvider / CUDADeviceID). CUDA declines OpenVINO and never
+	// falls back to the CPU provider.
+	ExecutionProvider inference.ExecutionProviderOptions
 }
 
 // NewBat creates a new bat detection model instance.
@@ -103,6 +109,7 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 			Labels:              cfg.EmbeddingLabels,
 			Threads:             cfg.Threads,
 			SkipLabelValidation: true,
+			ExecutionProvider:   cfg.ExecutionProvider,
 		})
 		if cerr != nil {
 			batCC.Close()
@@ -122,10 +129,11 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 				Build()
 		}
 		embExtractor = ext
-		// The embedding extractor and the classifier both run on the ONNX Runtime CPU
-		// EP on this path. Surface the weight precision detected from the classifier
+		// The heavy embedding extractor runs on the configured ONNX Runtime provider
+		// (CPU, or CUDA when selected and verified); the tiny classifier head always
+		// stays on the CPU. Surface the weight precision detected from the classifier
 		// model filename (empty when no token, the common case for the bat model).
-		device = deviceCPU
+		device = onnxDeviceLabel(cfg.ExecutionProvider)
 		backend = BackendONNX
 		precision = string(detectQuantization(cfg.ClassifierModelPath))
 	}
@@ -166,6 +174,9 @@ func NewBat(cfg *BatModelConfig) (*Bat, error) {
 // f16. expectedDim is the bat classifier's input dimension, used to reject a wrong
 // output port before any inference.
 func tryBatOpenVINO(cfg *BatModelConfig, expectedDim int) (extractor inference.EmbeddingExtractor, device, precision string, ok bool) {
+	if cudaDeclinesOpenVINO(RegistryIDBat, cfg.Backend, cfg.ExecutionProvider) {
+		return nil, "", "", false
+	}
 	log := GetLogger()
 
 	// openVINOPlanFor gates on the build tag, backend preference, and device
@@ -390,7 +401,8 @@ func (b *Bat) Labels() []string {
 
 // RuntimeInfo returns the device, backend, and effective precision the bat
 // pipeline bound to at construction: the OpenVINO device (CPU/GPU) when the
-// embedding extractor runs on OpenVINO, else "CPU" for the ONNX Runtime CPU EP;
+// embedding extractor runs on OpenVINO, else the ONNX Runtime provider's device
+// ("CPU", or "CUDA:<id>" on the CUDA provider);
 // BackendOpenVINO on the OV path (else BackendONNX); FP32 on the OV path (which
 // the bat embedding model is forced to), or the weight precision detected from
 // the bat classifier model filename on the ORT path (empty when no token). All

@@ -148,6 +148,52 @@ environment:
 
 ---
 
+### `BIRDNET_ONNXPROVIDER`
+
+**Purpose:** Select the ONNX Runtime execution provider for species classifiers.
+
+**Default:** `cpu`
+
+**Usage:**
+
+```yaml
+environment:
+  - BIRDNET_ONNXPROVIDER=cuda
+```
+
+**Description:**
+
+- `cpu` (default) runs inference on the CPU; `cuda` runs ONNX models on an
+  NVIDIA GPU
+- `cuda` needs the CUDA image variant (a `cuda` tag), `--gpus all` and an ONNX
+  model; if CUDA cannot be used the model fails to load with an error instead of
+  running on the CPU
+- Same as `birdnet.onnxprovider` in `config.yaml`; see
+  [NVIDIA GPU (CUDA) Inference](../doc/wiki/nvidia-gpu.md)
+
+---
+
+### `BIRDNET_CUDADEVICEID`
+
+**Purpose:** Choose which NVIDIA GPU to use when more than one is visible.
+
+**Default:** `0`
+
+**Usage:**
+
+```yaml
+environment:
+  - BIRDNET_CUDADEVICEID=1
+```
+
+**Description:**
+
+- The GPU number as seen inside the container (`--gpus device=1` exposes one
+  GPU, which is then number 0)
+- Same as `birdnet.cudadeviceid` in `config.yaml`
+
+---
+
 ## Container Health Check
 
 The container includes a built-in health check that monitors the application's web interface.

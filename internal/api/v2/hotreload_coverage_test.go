@@ -79,6 +79,8 @@ var hotReloadRegistry = map[string]hotReloadEntry{
 	"BirdNET.OpenVINOPath":       {categories: []hotReloadCategory{hotReloadRestart}},
 	"BirdNET.Backend":            {categories: []hotReloadCategory{hotReloadFresh}, action: "reload_birdnet"},
 	"BirdNET.OpenVINODevice":     {categories: []hotReloadCategory{hotReloadFresh}, action: "reload_birdnet"},
+	"BirdNET.ONNXProvider":       {categories: []hotReloadCategory{hotReloadFresh}, action: "reload_birdnet"},
+	"BirdNET.CUDADeviceID":       {categories: []hotReloadCategory{hotReloadFresh}, action: "reload_birdnet"},
 	"BirdNET.Version":            {categories: []hotReloadCategory{hotReloadFresh}, action: "reload_birdnet"},
 	// Read fresh by the model manager on every download, so a mirror change
 	// applies to the next install with no reload or restart.

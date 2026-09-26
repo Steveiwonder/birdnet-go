@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tphakala/birdnet-go/cmd/authors"
 	"github.com/tphakala/birdnet-go/cmd/benchmark"
+	"github.com/tphakala/birdnet-go/cmd/cudabenchmark"
 	"github.com/tphakala/birdnet-go/cmd/importstage"
 	"github.com/tphakala/birdnet-go/cmd/license"
 	"github.com/tphakala/birdnet-go/cmd/notify"
@@ -39,6 +40,7 @@ func RootCommand(settings *conf.Settings) *cobra.Command {
 	rangeCmd := rangefilter.Command(settings)
 	supportCmd := support.Command(settings)
 	benchmarkCmd := benchmark.Command(settings)
+	cudaBenchmarkCmd := cudabenchmark.Command(settings)
 	notifyCmd := notify.Command(settings)
 	importStageCmd := importstage.Command(settings)
 
@@ -49,6 +51,7 @@ func RootCommand(settings *conf.Settings) *cobra.Command {
 		rangeCmd,
 		supportCmd,
 		benchmarkCmd,
+		cudaBenchmarkCmd,
 		notifyCmd,
 		importStageCmd,
 	}

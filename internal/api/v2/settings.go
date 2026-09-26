@@ -23,6 +23,7 @@ import (
 	"github.com/tphakala/birdnet-go/internal/conf"
 	"github.com/tphakala/birdnet-go/internal/events"
 	"github.com/tphakala/birdnet-go/internal/imageprovider"
+	"github.com/tphakala/birdnet-go/internal/inference"
 	"github.com/tphakala/birdnet-go/internal/logger"
 	"github.com/tphakala/birdnet-go/internal/notification"
 	"github.com/tphakala/birdnet-go/internal/profiling"
@@ -2712,6 +2713,16 @@ func birdnetSettingsChanged(oldSettings, currentSettings *conf.Settings) bool {
 	// Orchestrator.ReloadSecondaryModels, so a device/backend change applies to
 	// both without a restart.
 	if oldSettings.BirdNET.OpenVINODevice != currentSettings.BirdNET.OpenVINODevice {
+		return true
+	}
+
+	// Check for changes in the ONNX Runtime execution provider (CPU <-> CUDA) or
+	// the CUDA device. The ONNX Runtime library stays loaded; only the sessions are
+	// rebuilt on the new provider, so this is hot-reloadable. The reload builds
+	// the new sessions before closing the old ones, so a CUDA request that fails
+	// to initialize leaves the previous sessions serving and reports the error.
+	if inference.ResolveExecutionProvider(oldSettings.BirdNET.ONNXProvider, oldSettings.BirdNET.CUDADeviceID) !=
+		inference.ResolveExecutionProvider(currentSettings.BirdNET.ONNXProvider, currentSettings.BirdNET.CUDADeviceID) {
 		return true
 	}
 
